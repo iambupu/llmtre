@@ -1,0 +1,27 @@
+[
+  {
+    "name": "observe_scene",
+    "input": "看看周围",
+    "expected_type": "observe",
+    "expected_clarification": false
+  },
+  {
+    "name": "wait_naturally",
+    "input": "我坐一会",
+    "expected_type": "wait",
+    "expected_clarification": false
+  },
+  {
+    "name": "continue_on_road",
+    "input": "在路上移动",
+    "expected_type": "move",
+    "expected_location_id": "forest_edge",
+    "expected_clarification": false
+  },
+  {
+    "name": "talk_missing_target",
+    "input": "我想和他说话",
+    "expected_type": "talk",
+    "expected_clarification": false
+  }
+]

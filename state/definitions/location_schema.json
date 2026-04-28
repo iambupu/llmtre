@@ -1,0 +1,49 @@
+{
+  "description": "场景/地点契约",
+  "properties": {
+    "location_id": {
+      "description": "场景唯一标识符",
+      "title": "Location Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "场景名称",
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "description": "场景的叙事描述（光照、气味、氛围）",
+      "title": "Description",
+      "type": "string"
+    },
+    "connected_locations": {
+      "description": "逻辑上相邻的场景 ID 列表",
+      "items": {
+        "type": "string"
+      },
+      "title": "Connected Locations",
+      "type": "array"
+    },
+    "environmental_tags": {
+      "description": "环境标签，如 'dark', 'wet'，用于影响判定",
+      "items": {
+        "type": "string"
+      },
+      "title": "Environmental Tags",
+      "type": "array"
+    },
+    "status_effects": {
+      "additionalProperties": true,
+      "description": "当前场景的状态，如 {'on_fire': True, 'alert_level': 2}",
+      "title": "Status Effects",
+      "type": "object"
+    }
+  },
+  "required": [
+    "location_id",
+    "name",
+    "description"
+  ],
+  "title": "LocationTemplate",
+  "type": "object"
+}

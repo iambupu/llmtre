@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "EvaluatorType": {
+      "enum": [
+        "deterministic",
+        "llm_prompt",
+        "python_script"
+      ],
+      "title": "EvaluatorType",
+      "type": "string"
+    },
+    "ObjectiveEvaluator": {
+      "description": "任务目标判定器契约",
+      "properties": {
+        "evaluator_type": {
+          "$ref": "#/$defs/EvaluatorType",
+          "description": "判定类型"
+        },
+        "condition": {
+          "description": "判定具体条件 (SQL/Prompt/Python Code)",
+          "title": "Condition",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "description": "判定器附加参数",
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "evaluator_type",
+        "condition"
+      ],
+      "title": "ObjectiveEvaluator",
+      "type": "object"
+    },
+    "QuestObjective": {
+      "description": "任务原子目标",
+      "properties": {
+        "objective_id": {
+          "description": "目标 ID",
+          "title": "Objective Id",
+          "type": "string"
+        },
+        "description": {
+          "description": "目标描述",
+          "title": "Description",
+          "type": "string"
+        },
+        "is_mandatory": {
+          "default": true,
+          "description": "是否为必须完成",
+          "title": "Is Mandatory",
+          "type": "boolean"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/ObjectiveEvaluator",
+          "description": "判定逻辑"
+        },
+        "is_completed": {
+          "default": false,
+          "description": "当前是否已达成",
+          "title": "Is Completed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "objective_id",
+        "description",
+        "evaluator"
+      ],
+      "title": "QuestObjective",
+      "type": "object"
+    },
+    "QuestStage": {
+      "description": "任务阶段契约 (状态机节点)",
+      "properties": {
+        "stage_id": {
+          "description": "阶段 ID",
+          "title": "Stage Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "阶段名称",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "description": "阶段背景描述",
+          "title": "Description",
+          "type": "string"
+        },
+        "objectives": {
+          "description": "该阶段需要达成的目标列表",
+          "items": {
+            "$ref": "#/$defs/QuestObjective"
+          },
+          "title": "Objectives",
+          "type": "array"
+        },
+        "next_stage_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "默认下一阶段 ID",
+          "title": "Next Stage Id"
+        },
+        "branching_logic": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分支逻辑：判定结果 -> 目标 Stage ID",
+          "title": "Branching Logic"
+        }
+      },
+      "required": [
+        "stage_id",
+        "name",
+        "description",
+        "objectives"
+      ],
+      "title": "QuestStage",
+      "type": "object"
+    }
+  },
+  "description": "剧本/任务模板核心契约",
+  "properties": {
+    "quest_id": {
+      "description": "剧本唯一标识符",
+      "title": "Quest Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "剧本名称",
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "description": "剧本概要描述",
+      "title": "Description",
+      "type": "string"
+    },
+    "stages": {
+      "description": "阶段列表",
+      "items": {
+        "$ref": "#/$defs/QuestStage"
+      },
+      "title": "Stages",
+      "type": "array"
+    },
+    "prerequisites": {
+      "additionalProperties": true,
+      "description": "任务开启的前置要求",
+      "title": "Prerequisites",
+      "type": "object"
+    },
+    "rewards": {
+      "description": "任务完成奖励",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Rewards",
+      "type": "array"
+    },
+    "time_limit_minutes": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "限时完成时间 (分钟)",
+      "title": "Time Limit Minutes"
+    }
+  },
+  "required": [
+    "quest_id",
+    "name",
+    "description",
+    "stages"
+  ],
+  "title": "QuestTemplate",
+  "type": "object"
+}

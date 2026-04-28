@@ -1,0 +1,748 @@
+openapi: 3.1.0
+info:
+  title: TRE Web API (最小可玩草案)
+  version: 0.1.0
+  description: |
+    本文档是 TRE 最小可玩流程的 Web API 契约草案，仅定义接口与参数约束，不包含实现。
+    目标：统一会话、回合、记忆、沙盒与重置入口，确保前后端对齐。
+servers:
+  - url: http://localhost:5000
+    description: 本地开发环境
+tags:
+  - name: Sessions
+    description: 会话与生命周期管理
+  - name: Turns
+    description: 回合执行与历史查询
+  - name: Memory
+    description: 会话记忆查询与刷新
+  - name: Sandbox
+    description: 沙盒并入与回滚
+  - name: Runtime
+    description: 状态重置
+paths:
+  /api/sessions:
+    post:
+      tags: [Sessions]
+      summary: 创建会话
+      description: 创建一个新的游戏会话并初始化角色与会话元数据。
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateSessionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}:
+    get:
+      tags: [Sessions]
+      summary: 获取会话状态
+      description: 获取会话元数据与当前回合进度。
+      operationId: getSession
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetSessionResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/turns:
+    post:
+      tags: [Turns]
+      summary: 执行一个回合（统一入口）
+      description: |
+        核心回合 API。服务端必须对同一 session_id 的写操作串行化。
+        同一 request_id 的重复请求必须返回同一结果（幂等）。
+      operationId: createTurn
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTurnRequest"
+      responses:
+        "200":
+          description: 回合执行成功（含动作合法与不合法两种业务结果）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateTurnResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/TurnConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      tags: [Turns]
+      summary: 分页查询回合历史
+      operationId: listTurns
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+        - $ref: "#/components/parameters/PageQuery"
+        - $ref: "#/components/parameters/PageSizeQuery"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListTurnsResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/turns/{turn_id}:
+    get:
+      tags: [Turns]
+      summary: 查询单回合详情
+      operationId: getTurn
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+        - $ref: "#/components/parameters/TurnIdPath"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetTurnResponse"
+        "404":
+          $ref: "#/components/responses/SessionOrTurnNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/memory:
+    get:
+      tags: [Memory]
+      summary: 获取会话记忆
+      description: 查询当前会话可供叙事或提示词拼接的记忆上下文。
+      operationId: getMemory
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+        - $ref: "#/components/parameters/MemoryFormatQuery"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetMemoryResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/memory/refresh:
+    post:
+      tags: [Memory]
+      summary: 刷新会话记忆摘要
+      operationId: refreshMemory
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshMemoryRequest"
+      responses:
+        "200":
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshMemoryResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/sandbox/commit:
+    post:
+      tags: [Sandbox]
+      summary: 并入沙盒
+      operationId: commitSandbox
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestWithIdempotency"
+      responses:
+        "200":
+          description: 并入成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxCommitResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/TurnConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/sandbox/discard:
+    post:
+      tags: [Sandbox]
+      summary: 丢弃沙盒
+      operationId: discardSandbox
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestWithIdempotency"
+      responses:
+        "200":
+          description: 丢弃成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxDiscardResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/TurnConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/reset:
+    post:
+      tags: [Runtime]
+      summary: 重置会话
+      description: |
+        重置会话运行状态。默认保留 character_id 并清空回合、记忆和临时上下文。
+      operationId: resetSession
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetSessionRequest"
+      responses:
+        "200":
+          description: 重置成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetSessionResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  parameters:
+    SessionIdPath:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-zA-Z0-9_-]{8,64}$"
+    TurnIdPath:
+      name: turn_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    PageQuery:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeQuery:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    MemoryFormatQuery:
+      name: format
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [summary, raw]
+        default: summary
+
+  responses:
+    InvalidArgument:
+      description: 参数不合法
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            ok: false
+            trace_id: trc_01HXYZABCDEF
+            error:
+              code: INVALID_ARGUMENT
+              message: user_input 不能为空
+    SessionNotFound:
+      description: 会话不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            ok: false
+            trace_id: trc_01HXYZABCDEF
+            error:
+              code: SESSION_NOT_FOUND
+              message: session_id 不存在
+    SessionOrTurnNotFound:
+      description: 会话或回合不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            ok: false
+            trace_id: trc_01HXYZABCDEF
+            error:
+              code: TURN_NOT_FOUND
+              message: turn_id 不存在
+    TurnConflict:
+      description: 回合并发冲突或幂等冲突
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            ok: false
+            trace_id: trc_01HXYZABCDEF
+            error:
+              code: TURN_CONFLICT
+              message: 同一 session_id 存在并发写冲突
+    InternalError:
+      description: 内部错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            ok: false
+            trace_id: trc_01HXYZABCDEF
+            error:
+              code: INTERNAL_ERROR
+              message: 未知内部异常
+
+  schemas:
+    RequestId:
+      type: string
+      pattern: "^[a-zA-Z0-9_-]{8,64}$"
+      description: 幂等请求标识。客户端应保证唯一。
+    SessionId:
+      type: string
+      pattern: "^[a-zA-Z0-9_-]{8,64}$"
+    CharacterId:
+      type: string
+      pattern: "^[a-zA-Z0-9_-]{3,64}$"
+      default: player_01
+    IsoTime:
+      type: string
+      format: date-time
+    TurnId:
+      type: integer
+      minimum: 0
+
+    ErrorObject:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_ARGUMENT
+            - SESSION_NOT_FOUND
+            - CHARACTER_NOT_FOUND
+            - TURN_NOT_FOUND
+            - TURN_CONFLICT
+            - IDEMPOTENCY_CONFLICT
+            - MODEL_UNAVAILABLE
+            - INTERNAL_ERROR
+        message:
+          type: string
+          maxLength: 500
+    ErrorEnvelope:
+      type: object
+      required: [ok, trace_id, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        trace_id:
+          type: string
+          pattern: "^trc_[a-zA-Z0-9]{8,64}$"
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+
+    RequestWithIdempotency:
+      type: object
+      required: [request_id]
+      properties:
+        request_id:
+          $ref: "#/components/schemas/RequestId"
+
+    SessionMetadata:
+      type: object
+      additionalProperties:
+        type: string
+      description: 透传给服务端的会话附加元信息。
+
+    MemoryPolicy:
+      type: object
+      required: [mode, max_turns]
+      properties:
+        mode:
+          type: string
+          enum: [auto]
+          default: auto
+        max_turns:
+          type: integer
+          minimum: 5
+          maximum: 100
+          default: 20
+
+    CreateSessionRequest:
+      allOf:
+        - $ref: "#/components/schemas/RequestWithIdempotency"
+        - type: object
+          properties:
+            character_id:
+              $ref: "#/components/schemas/CharacterId"
+            sandbox_mode:
+              type: boolean
+              default: false
+            metadata:
+              $ref: "#/components/schemas/SessionMetadata"
+    CreateSessionResponse:
+      type: object
+      required:
+        [ok, trace_id, session_id, character_id, sandbox_mode, created_at, current_turn_id]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+          pattern: "^trc_[a-zA-Z0-9]{8,64}$"
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        character_id:
+          $ref: "#/components/schemas/CharacterId"
+        sandbox_mode:
+          type: boolean
+        current_turn_id:
+          $ref: "#/components/schemas/TurnId"
+        created_at:
+          $ref: "#/components/schemas/IsoTime"
+
+    GetSessionResponse:
+      type: object
+      required: [ok, trace_id, session_id, character_id, sandbox_mode, current_turn_id, last_active_at]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        character_id:
+          $ref: "#/components/schemas/CharacterId"
+        sandbox_mode:
+          type: boolean
+        current_turn_id:
+          $ref: "#/components/schemas/TurnId"
+        last_active_at:
+          $ref: "#/components/schemas/IsoTime"
+
+    CreateTurnRequest:
+      allOf:
+        - $ref: "#/components/schemas/RequestWithIdempotency"
+        - type: object
+          required: [user_input]
+          properties:
+            user_input:
+              type: string
+              minLength: 1
+              maxLength: 500
+            character_id:
+              $ref: "#/components/schemas/CharacterId"
+            sandbox_mode:
+              type: boolean
+            memory:
+              $ref: "#/components/schemas/MemoryPolicy"
+    CreateTurnResponse:
+      type: object
+      required:
+        - ok
+        - trace_id
+        - session_id
+        - turn_id
+        - is_valid
+        - final_response
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        turn_id:
+          $ref: "#/components/schemas/TurnId"
+        is_valid:
+          type: boolean
+        action_intent:
+          type: object
+          additionalProperties: true
+          nullable: true
+        physics_diff:
+          type: object
+          additionalProperties: true
+          nullable: true
+        final_response:
+          type: string
+          minLength: 1
+        memory_summary:
+          type: string
+          nullable: true
+        errors:
+          type: array
+          items:
+            type: string
+
+    TurnSummary:
+      type: object
+      required: [turn_id, is_valid, user_input, final_response, created_at]
+      properties:
+        turn_id:
+          $ref: "#/components/schemas/TurnId"
+        is_valid:
+          type: boolean
+        user_input:
+          type: string
+        final_response:
+          type: string
+        created_at:
+          $ref: "#/components/schemas/IsoTime"
+    ListTurnsResponse:
+      type: object
+      required: [ok, trace_id, session_id, page, page_size, total, items]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TurnSummary"
+
+    GetTurnResponse:
+      type: object
+      required: [ok, trace_id, session_id, turn_id, created_at]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        turn_id:
+          $ref: "#/components/schemas/TurnId"
+        user_input:
+          type: string
+        is_valid:
+          type: boolean
+        action_intent:
+          type: object
+          additionalProperties: true
+          nullable: true
+        physics_diff:
+          type: object
+          additionalProperties: true
+          nullable: true
+        final_response:
+          type: string
+        memory_summary:
+          type: string
+          nullable: true
+        created_at:
+          $ref: "#/components/schemas/IsoTime"
+
+    MemoryEntry:
+      type: object
+      required: [turn_id, text]
+      properties:
+        turn_id:
+          $ref: "#/components/schemas/TurnId"
+        text:
+          type: string
+    GetMemoryResponse:
+      type: object
+      required: [ok, trace_id, session_id, format, summary, token_estimate]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        format:
+          type: string
+          enum: [summary, raw]
+        summary:
+          type: string
+        recent_turns:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryEntry"
+        token_estimate:
+          type: integer
+          minimum: 0
+
+    RefreshMemoryRequest:
+      allOf:
+        - $ref: "#/components/schemas/RequestWithIdempotency"
+        - type: object
+          properties:
+            max_turns:
+              type: integer
+              minimum: 5
+              maximum: 100
+              default: 20
+    RefreshMemoryResponse:
+      type: object
+      required: [ok, trace_id, session_id, summary, covered_turn_range]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        summary:
+          type: string
+        covered_turn_range:
+          type: object
+          required: [from_turn_id, to_turn_id]
+          properties:
+            from_turn_id:
+              $ref: "#/components/schemas/TurnId"
+            to_turn_id:
+              $ref: "#/components/schemas/TurnId"
+
+    SandboxCommitResponse:
+      type: object
+      required: [ok, trace_id, session_id, committed, turn_id]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        committed:
+          type: boolean
+          enum: [true]
+        turn_id:
+          $ref: "#/components/schemas/TurnId"
+    SandboxDiscardResponse:
+      type: object
+      required: [ok, trace_id, session_id, discarded, turn_id]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        discarded:
+          type: boolean
+          enum: [true]
+        turn_id:
+          $ref: "#/components/schemas/TurnId"
+
+    ResetSessionRequest:
+      allOf:
+        - $ref: "#/components/schemas/RequestWithIdempotency"
+        - type: object
+          properties:
+            keep_character:
+              type: boolean
+              default: true
+    ResetSessionResponse:
+      type: object
+      required: [ok, trace_id, session_id, reset, current_turn_id]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        reset:
+          type: boolean
+          enum: [true]
+        current_turn_id:
+          $ref: "#/components/schemas/TurnId"

@@ -1,0 +1,87 @@
+"""
+TypedDict / Pydantic 状态流转数据结构严格定义
+"""
+
+from typing import Any, TypedDict
+
+
+class CharacterState(TypedDict):
+    """角色状态"""
+    id: str
+    name: str
+    hp: int
+    max_hp: int
+    mp: int
+    max_mp: int
+    inventory: list[str]
+    location: str
+
+
+class WorldState(TypedDict, total=False):
+    """世界状态"""
+    current_time_minutes: int
+    weather: str
+    active_events: list[str]
+    rag_enabled: bool
+    rag_ready: bool
+    rag_query: str
+    rag_context: str
+    rag_error: str
+
+
+class SceneExitState(TypedDict):
+    """场景出口状态"""
+    direction: str
+    location_id: str
+    label: str
+    aliases: list[str]
+
+
+class SceneSnapshot(TypedDict):
+    """回合场景快照"""
+    current_location: dict[str, Any]
+    exits: list[SceneExitState]
+    visible_npcs: list[dict[str, Any]]
+    visible_items: list[dict[str, Any]]
+    active_quests: list[dict[str, Any]]
+    recent_memory: str
+    available_actions: list[str]
+    suggested_actions: list[str]
+
+
+class FlowState(TypedDict):
+    """
+    LangGraph 节点间流转的核心数据结构 (内环状态)
+    """
+    # 1. 玩家原始输入
+    user_input: str
+    active_character_id: str
+
+    # 2. NLU 解析结果 (符合 ActionSchema)
+    action_intent: dict[str, Any] | None
+
+    # 3. 校验状态
+    is_valid: bool
+    validation_errors: list[str]
+    turn_outcome: str
+    clarification_question: str
+    should_advance_turn: bool
+    should_write_story_memory: bool
+    debug_trace: list[dict[str, Any]]
+
+    # 4. 物理结算结果 (State Diff)
+    physics_diff: dict[str, Any] | None
+
+    # 5. 回合元数据
+    turn_id: int
+    is_sandbox_mode: bool
+
+    # 6. 最终输出文本
+    final_response: str
+    quick_actions: list[str]
+    write_results: list[dict[str, Any]]
+
+    # 7. 缓存的世界与角色快照 (用于 RAG 或叙事参考)
+    world_snapshot: WorldState | None
+    scene_snapshot: SceneSnapshot | None
+    active_character: CharacterState | None

@@ -1,0 +1,52 @@
+# ==========================================
+# TRE 引擎 RAG 知识库与模型配置文件
+# ==========================================
+
+llm:
+  # LLM 用于生成回答和自定义元数据打分。
+  # 原生支持 (自动填充 Base URL) 的 provider 包括: 
+  # - deepseek, openrouter, gemini, grok, glm, kimi, openai, qwen, siliconflow, ollama, lmstudio
+  provider: "ollama"
+  model: "qwen3:8b"
+  api_key: ""
+  
+  # base_url 留空时，系统会自动映射以下官方地址:
+  # - deepseek: https://api.deepseek.com/v1
+  # - openrouter: https://openrouter.ai/api/v1
+  # - gemini: https://generativelanguage.googleapis.com/v1beta/openai/
+  # - grok: https://api.x.ai/v1
+  # - glm: https://open.bigmodel.cn/api/paas/v4
+  # - kimi: https://api.moonshot.cn/v1
+  # - qwen: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # - siliconflow: https://api.siliconflow.cn/v1
+  # - openai: https://api.openai.com/v1
+  base_url: "http://localhost:11434"
+
+embedding:
+  # Embedding 用于将文本向量化。
+  # 注意: deepseek/openrouter 通常不提供专用的低延迟嵌入端点, 强烈建议使用 ollama 或 openai
+  provider: "ollama"
+  model: "bge-m3"
+  api_key: ""
+  # base_url 留空时，系统会根据 provider 自动映射默认 API 地址。
+  base_url: "http://localhost:11434"
+
+# 用于 LlamaParse 复杂 PDF 解析（非必须）
+llama_cloud_api_key: "" 
+
+property_graph:
+  # 是否启用属性图谱构建（需要 LLM 具备较强的指令遵循能力）
+  enabled: true
+  # 提取三元组时使用的 Prompt。
+  # {text} 为占位符，引擎会自动替换为目标文本。
+  # 如果您想使用通用的提取逻辑，可以改为："从以下文本中提取所有的实体、属性及其相互关系，以 (实体1, 关系, 实体2) 的格式输出。"
+  extraction_prompt: |
+    从以下文本中提取关键实体及其属性关系。专注于组织架构、技术定义、角色背景、地理位置以及物理法则的约束。
+    输出格式必须严格为：(实体1, 关系, 实体2)
+    文本内容：
+    {text}
+
+metadata_extraction:
+  # 是否开启由 LLM 进行的自动特征提取与打分（极其耗时，但能提升检索质量）
+  enable_custom_scoring: false
+  scoring_prompt: "分析这段 TRPG 规则或背景设定的文本，从 1 到 10 评估其对世界观的重要性（1=边缘细节，10=核心物理法则或主线剧情），并返回分数和三个核心关键字标签。格式：分数|标签1,标签2,标签3"

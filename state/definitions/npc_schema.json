@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "EntityType": {
+      "enum": [
+        "player",
+        "npc",
+        "monster"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "ResourcePool": {
+      "description": "生命与法力资源契约",
+      "properties": {
+        "hp": {
+          "description": "当前生命值",
+          "title": "Hp",
+          "type": "integer"
+        },
+        "max_hp": {
+          "description": "最大生命值",
+          "title": "Max Hp",
+          "type": "integer"
+        },
+        "mp": {
+          "description": "当前法力值",
+          "title": "Mp",
+          "type": "integer"
+        },
+        "max_mp": {
+          "description": "最大法力值",
+          "title": "Max Mp",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hp",
+        "max_hp",
+        "mp",
+        "max_mp"
+      ],
+      "title": "ResourcePool",
+      "type": "object"
+    },
+    "Stats": {
+      "description": "基础属性契约",
+      "properties": {
+        "strength": {
+          "default": 10,
+          "description": "力量：影响物理伤害和负重",
+          "title": "Strength",
+          "type": "integer"
+        },
+        "agility": {
+          "default": 10,
+          "description": "敏捷：影响闪避、潜行和先攻",
+          "title": "Agility",
+          "type": "integer"
+        },
+        "intelligence": {
+          "default": 10,
+          "description": "智力：影响魔法效果和解谜",
+          "title": "Intelligence",
+          "type": "integer"
+        },
+        "constitution": {
+          "default": 10,
+          "description": "体质：影响最大生命值和抗性",
+          "title": "Constitution",
+          "type": "integer"
+        }
+      },
+      "title": "Stats",
+      "type": "object"
+    }
+  },
+  "description": "实体/NPC 数据核心契约 (Entity Data Contract)\n\n定义了世界中活动对象的基本模板。",
+  "properties": {
+    "entity_id": {
+      "description": "全局唯一标识符，如 'guard_captain_01'",
+      "title": "Entity Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "实体名称",
+      "title": "Name",
+      "type": "string"
+    },
+    "entity_type": {
+      "$ref": "#/$defs/EntityType",
+      "description": "实体类型分类"
+    },
+    "description": {
+      "description": "人物背景、性格和外貌描述（供 RAG 和 交互 Agent 生成对话使用）",
+      "title": "Description",
+      "type": "string"
+    },
+    "base_stats": {
+      "$ref": "#/$defs/Stats",
+      "description": "基础属性定义"
+    },
+    "resources": {
+      "$ref": "#/$defs/ResourcePool",
+      "description": "当前与最大生命/法力资源"
+    },
+    "traits": {
+      "description": "语义标签，如 ['狡诈', '恐惧蜘蛛', '效忠于王室']",
+      "items": {
+        "type": "string"
+      },
+      "title": "Traits",
+      "type": "array"
+    },
+    "social_relations": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "社交关系矩阵，Key 为目标实体 ID，Value 为好感度/仇恨值",
+      "title": "Social Relations",
+      "type": "object"
+    },
+    "current_location_id": {
+      "default": "unknown",
+      "description": "当前所处场景的 ID",
+      "title": "Current Location Id",
+      "type": "string"
+    },
+    "behavior_pattern": {
+      "default": "neutral",
+      "description": "行为模式分类，用于指导状态机逻辑，如 'aggressive', 'cowardly'",
+      "title": "Behavior Pattern",
+      "type": "string"
+    },
+    "default_inventory": {
+      "description": "默认携带的物品 ID 列表",
+      "items": {
+        "type": "string"
+      },
+      "title": "Default Inventory",
+      "type": "array"
+    },
+    "state_flags": {
+      "description": "当前状态标记，如 ['invisible', 'poisoned']",
+      "items": {
+        "type": "string"
+      },
+      "title": "State Flags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entity_id",
+    "name",
+    "entity_type",
+    "description",
+    "resources"
+  ],
+  "title": "EntityTemplate",
+  "type": "object"
+}

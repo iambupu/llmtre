@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tre"
+version = "0.1.0"
+description = "Text RPG Engine - Deterministic Logic First TRPG Framework"
+readme = "README.md"
+requires-python = ">=3.14"
+license = {text = "MIT"}
+authors = [
+    {name = "TRE Team"}
+]
+keywords = ["trpg", "rpg", "game-engine", "langgraph", "llm", "text-adventure"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Games/Entertainment",
+]
+
+dependencies = [
+    "flask>=3.0.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "llama-index>=0.11.0",
+    "llama-index-core>=0.11.0",
+    "llama-index-llms-ollama>=0.3.0",
+    "llama-index-embeddings-ollama>=0.3.0",
+    "llama-index-llms-openai>=0.2.0",
+    "llama-index-readers-file>=0.6.0",
+    "llama-parse>=0.6.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+    "pymupdf>=1.24.0",
+    "openpyxl>=3.1.0",
+    "docx2txt>=0.8",
+    "xmltodict>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10.0",
+    "black>=24.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/llmtre"
+Documentation = "https://github.com/llmtre/docs"
+Repository = "https://github.com/llmtre"
+
+[tool.setuptools.packages.find]
+include = ["agents*", "tools*", "workflows*", "core*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+exclude = ["^tests/"]
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["llama_index.*", "llama_parse"]
+ignore_missing_imports = true

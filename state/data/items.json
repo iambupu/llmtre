@@ -1,0 +1,32 @@
+[
+  {
+    "item_id": "iron_sword_01",
+    "name": "铁剑",
+    "description": "一把普普通通的铁剑，虽然粗糙但很锋利。",
+    "item_type": "weapon",
+    "requirements": {
+      "min_strength": 8
+    },
+    "effects": [
+      {
+        "target_attribute": "attack",
+        "value": 5
+      }
+    ],
+    "is_stackable": false
+  },
+  {
+    "item_id": "health_potion_01",
+    "name": "治疗药水",
+    "description": "散发着清香的红色液体，可以恢复少量生命值。",
+    "item_type": "consumable",
+    "requirements": {},
+    "effects": [
+      {
+        "target_attribute": "hp",
+        "value": 20
+      }
+    ],
+    "is_stackable": true
+  }
+]

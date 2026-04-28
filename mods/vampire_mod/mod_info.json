@@ -1,0 +1,12 @@
+{
+  "mod_id": "vampire_mod",
+  "name": "吸血鬼大修",
+  "load_priority": 100,
+  "hooks_manifest": {
+    "vampire_lifesteal": {
+      "trigger": "on_combat_end",
+      "write_access": ["player.hp"],
+      "description": "战斗结束吸取血液恢复生命"
+    }
+  }
+}

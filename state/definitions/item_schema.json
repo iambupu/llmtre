@@ -1,0 +1,134 @@
+{
+  "$defs": {
+    "ItemEffect": {
+      "description": "物品的数值影响契约",
+      "properties": {
+        "target_attribute": {
+          "description": "影响的属性，如 'hp', 'strength'",
+          "title": "Target Attribute",
+          "type": "string"
+        },
+        "value": {
+          "description": "变化值，正数为增加，负数为减少",
+          "title": "Value",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target_attribute",
+        "value"
+      ],
+      "title": "ItemEffect",
+      "type": "object"
+    },
+    "ItemType": {
+      "enum": [
+        "weapon",
+        "armor",
+        "consumable",
+        "quest"
+      ],
+      "title": "ItemType",
+      "type": "string"
+    },
+    "Requirement": {
+      "description": "行为与物品使用条件契约",
+      "properties": {
+        "min_strength": {
+          "default": 0,
+          "description": "最低力量要求",
+          "title": "Min Strength",
+          "type": "integer"
+        },
+        "min_agility": {
+          "default": 0,
+          "description": "最低敏捷要求",
+          "title": "Min Agility",
+          "type": "integer"
+        },
+        "min_intelligence": {
+          "default": 0,
+          "description": "最低智力要求",
+          "title": "Min Intelligence",
+          "type": "integer"
+        }
+      },
+      "title": "Requirement",
+      "type": "object"
+    }
+  },
+  "description": "物品数据核心契约 (Item Data Contract)\n\n定义了一个物品必须具备哪些属性才能被数值引擎识别。\nMod 开发者提供的 JSON 必须完全符合此结构。",
+  "properties": {
+    "item_id": {
+      "description": "全局唯一标识符，如 'iron_sword_01'",
+      "title": "Item Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "物品展示名称",
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "description": "物品的叙事背景描述（供 RAG 和 LLM 使用）",
+      "title": "Description",
+      "type": "string"
+    },
+    "item_type": {
+      "$ref": "#/$defs/ItemType",
+      "description": "物品大类分类"
+    },
+    "requirements": {
+      "$ref": "#/$defs/Requirement",
+      "description": "装备/使用该物品的最低属性要求"
+    },
+    "effects": {
+      "description": "物品产生的数值效果列表",
+      "items": {
+        "$ref": "#/$defs/ItemEffect"
+      },
+      "title": "Effects",
+      "type": "array"
+    },
+    "weight": {
+      "default": 0.0,
+      "description": "重量",
+      "title": "Weight",
+      "type": "number"
+    },
+    "rarity": {
+      "default": "common",
+      "description": "稀有度：common, rare, epic, legendary",
+      "title": "Rarity",
+      "type": "string"
+    },
+    "hooks": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "事件钩子，如 {'on_use': 'heal_logic', 'on_equip': 'add_aura'}",
+      "title": "Hooks",
+      "type": "object"
+    },
+    "usage_limit": {
+      "default": -1,
+      "description": "使用次数限制，-1 表示无限次",
+      "title": "Usage Limit",
+      "type": "integer"
+    },
+    "is_stackable": {
+      "default": false,
+      "description": "在背包中是否可堆叠",
+      "title": "Is Stackable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "item_id",
+    "name",
+    "description",
+    "item_type"
+  ],
+  "title": "ItemTemplate",
+  "type": "object"
+}

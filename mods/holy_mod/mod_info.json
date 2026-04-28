@@ -1,0 +1,12 @@
+{
+  "mod_id": "holy_mod",
+  "name": "神圣加持",
+  "load_priority": 50,
+  "hooks_manifest": {
+    "holy_blessing": {
+      "trigger": "on_combat_end",
+      "write_access": ["player.hp", "player.mp"],
+      "description": "战斗结束获得神圣祈福"
+    }
+  }
+}

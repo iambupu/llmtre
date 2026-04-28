@@ -1,0 +1,163 @@
+{
+  "nlu": {
+    "action_keywords": {
+      "attack": ["攻击", "attack", "砍", "挥剑"],
+      "talk": ["交谈", "对话", "talk", "说话"],
+      "move": ["移动", "前往", "move", "去", "继续", "前进", "赶路", "走"],
+      "observe": ["观察", "看看", "环顾", "周围", "look", "observe"],
+      "wait": ["等待", "坐一会", "停一会", "待一会", "wait"],
+      "rest": ["休息", "小憩", "恢复", "rest"],
+      "inspect": ["检查", "查看", "inspect"],
+      "use_item": ["药水", "potion", "use", "使用"],
+      "interact": ["调查", "互动", "interact"],
+      "commit_sandbox": ["并入主线", "合并沙盒", "确认并入"],
+      "discard_sandbox": ["回滚沙盒", "放弃沙盒", "取消沙盒"]
+    },
+    "target_aliases": {
+      "goblin_01": ["地精", "goblin"],
+      "player_01": ["旅行者", "player"]
+    },
+    "location_aliases": {
+      "road": ["路", "道路", "路上"],
+      "forest_edge": ["森林", "forest"],
+      "camp": ["营地", "camp"]
+    },
+    "item_aliases": {
+      "health_potion_01": ["药水", "potion"]
+    }
+  },
+  "resolution": {
+    "attack": {
+      "base_dc": 10,
+      "agility_divisor": 2,
+      "damage_dice": "d6",
+      "strength_damage_divisor": 3,
+      "min_damage": 1
+    },
+    "move": {
+      "mp_delta": -1,
+      "state_flags_add": ["moved_recently"]
+    },
+    "talk": {
+      "mp_delta": -1,
+      "state_flags_add": ["conversation_started"]
+    },
+    "interact": {
+      "mp_delta": -1,
+      "state_flags_add": ["observed_surroundings"]
+    },
+    "observe": {
+      "state_flags_add": ["observed_surroundings"]
+    },
+    "wait": {
+      "state_flags_add": ["waited_recently"]
+    },
+    "rest": {
+      "hp_delta": 1,
+      "mp_delta": 2,
+      "state_flags_add": ["rested_recently"]
+    },
+    "inspect": {
+      "state_flags_add": ["inspected_surroundings"]
+    },
+    "commit_sandbox": {
+      "state_flags_add": ["sandbox_merged"]
+    },
+    "discard_sandbox": {
+      "state_flags_add": ["sandbox_discarded"]
+    }
+  },
+  "rag": {
+    "read_only_enabled": true,
+    "auto_initialize": true,
+    "query_template": "玩家[{active_character_id}]输入：{user_input}"
+  },
+  "outer_loop": {
+    "default_bridge": "workflow",
+    "emit_world_evolution": true,
+    "world_evolution_minutes_per_turn": 10,
+    "emit_timeout_seconds": 8.0,
+    "max_pending_tasks": 64,
+    "outbox_replay_limit": 10,
+    "outbox_replay_interval_seconds": 2.0,
+    "outbox_max_attempts": 5,
+    "outbox_backoff_seconds": 5,
+    "outbox_processing_timeout_seconds": 30,
+    "achievement_rewards": {
+      "first_blood": {
+        "mp_delta": 1
+      },
+      "keen_observer": {
+        "hp_delta": 1
+      }
+    }
+  },
+  "scene_defaults": {
+    "locations": {
+      "unknown": {
+        "id": "unknown",
+        "name": "无名道路",
+        "description": "一段尚未完全记录在世界状态中的道路。",
+        "exits": [
+          {
+            "direction": "forward",
+            "location_id": "forest_edge",
+            "label": "森林边缘",
+            "aliases": ["森林", "前方", "继续", "路上", "前进"]
+          }
+        ],
+        "visible_items": [],
+        "active_quests": []
+      },
+      "forest_edge": {
+        "id": "forest_edge",
+        "name": "森林边缘",
+        "description": "树影压在道路尽头，灌木间偶尔传来细碎声响。",
+        "exits": [
+          {
+            "direction": "back",
+            "location_id": "camp",
+            "label": "营地",
+            "aliases": ["营地", "回去", "后方"]
+          }
+        ],
+        "visible_items": [],
+        "active_quests": []
+      },
+      "camp": {
+        "id": "camp",
+        "name": "临时营地",
+        "description": "篝火余温尚在，是短暂整理状态的安全地点。",
+        "exits": [
+          {
+            "direction": "forward",
+            "location_id": "forest_edge",
+            "label": "森林边缘",
+            "aliases": ["森林", "前方"]
+          }
+        ],
+        "visible_items": [],
+        "active_quests": []
+      }
+    },
+    "available_actions": ["observe", "wait", "rest", "move", "talk", "inspect", "use_item", "attack"],
+    "suggested_actions": ["看看周围", "继续前进", "坐一会", "检查背包"]
+  },
+  "narrative_templates": {
+    "invalid": "{actor_name}的行动未能成立：{errors}",
+    "idle": "{actor_name}暂时没有采取有效行动。",
+    "attack_hit": "{actor_name}发起了攻击，判定 {attack_roll} 超过 {attack_dc}，对 {target_id} 造成了 {damage} 点伤害。",
+    "attack_miss": "{actor_name}发起了攻击，但未能命中 {target_id}。判定 {attack_roll} 未达到 {attack_dc}。",
+    "talk": "{actor_name}与 {target_id} 进行交谈，消耗了 {mp_cost} 点法力。",
+    "move": "{actor_name}前往了 {location_id}，消耗了 {mp_cost} 点法力。",
+    "use_item": "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。",
+    "interact": "{actor_name}仔细观察了周围环境，消耗了 {mp_cost} 点法力。",
+    "observe": "{actor_name}观察周围：{scene_description}",
+    "wait": "{actor_name}停下来片刻，留意周围的动静。",
+    "rest": "{actor_name}短暂休息，恢复了 {hp_delta} 点生命与 {mp_delta} 点法力。",
+    "inspect": "{actor_name}仔细检查当前场景，确认了可走的方向与可互动目标。",
+    "commit_sandbox": "{actor_name}将沙盒剧情并入了主线，当前世界状态已更新。",
+    "discard_sandbox": "{actor_name}放弃了沙盒剧情，世界状态已回滚到主线。",
+    "default": "{actor_name}完成了 {action_type} 行动。"
+  }
+}

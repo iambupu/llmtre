@@ -1,0 +1,15 @@
+{
+  "groups": [
+    {
+      "group_name": "core",
+      "enable_graph": true,
+      "description": "默认核心知识库分组。请将规则书、世界观或设定文档放入 docs/ 后，通过 tools/doc_importer.py 更新此配置。",
+      "tags": [
+        "core",
+        "rules",
+        "lore"
+      ],
+      "file_paths": []
+    }
+  ]
+}

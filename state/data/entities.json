@@ -1,0 +1,42 @@
+[
+  {
+    "entity_id": "player_01",
+    "name": "旅行者",
+    "entity_type": "player",
+    "description": "来自异世界的冒险者，寻找失散的记忆。",
+    "base_stats": {
+      "strength": 12,
+      "agility": 10,
+      "intelligence": 11,
+      "constitution": 10
+    },
+    "resources": {
+      "hp": 100,
+      "max_hp": 100,
+      "mp": 50,
+      "max_mp": 50
+    },
+    "behavior_pattern": "player",
+    "default_inventory": ["iron_sword_01", "health_potion_01"]
+  },
+  {
+    "entity_id": "goblin_01",
+    "name": "瘦弱的地精",
+    "entity_type": "monster",
+    "description": "一只在森林边缘游荡的饥饿地精。",
+    "base_stats": {
+      "strength": 6,
+      "agility": 12,
+      "intelligence": 4,
+      "constitution": 8
+    },
+    "resources": {
+      "hp": 30,
+      "max_hp": 30,
+      "mp": 0,
+      "max_mp": 0
+    },
+    "behavior_pattern": "aggressive",
+    "default_inventory": []
+  }
+]

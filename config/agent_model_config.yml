@@ -1,0 +1,46 @@
+version: 1
+
+defaults:
+  enabled: false
+  mode: "deterministic"
+  llm_profile: null
+  embedding_profile: null
+  timeout_seconds: 180
+  max_retries: 1
+
+profiles:
+  llm:
+    local_qwen_main:
+      provider: "ollama"
+      model: "qwen3:8b"
+      api_key: ""
+      base_url: "http://localhost:11434"
+      temperature: 0.2
+      max_tokens: 2048
+      think: true
+      think_prompt_prefix: "/think"
+
+  embedding:
+    local_bge_embedding:
+      provider: "ollama"
+      model: "bge-m3"
+      api_key: ""
+      base_url: "http://localhost:11434"
+
+bindings:
+  agents.nlu:
+    enabled: true
+    mode: "rule_first"
+    llm_profile: "local_qwen_main"
+
+  agents.gm:
+    enabled: true
+    mode: "llm_first"
+    llm_profile: "local_qwen_main"
+
+  agents.evolution:
+    enabled: false
+    mode: "deterministic"
+    llm_profile: null
+web_api:
+  turn_timeout_seconds: 180

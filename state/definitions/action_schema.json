@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "ActionEffect": {
+      "description": "行为产生的后果契约",
+      "properties": {
+        "effect_type": {
+          "$ref": "#/$defs/EffectType",
+          "description": "效果类型"
+        },
+        "target_id": {
+          "description": "目标实体 ID",
+          "title": "Target Id",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "description": "效果具体参数，如 {'attribute': 'hp', 'value': -10}",
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "effect_type",
+        "target_id"
+      ],
+      "title": "ActionEffect",
+      "type": "object"
+    },
+    "ActionType": {
+      "enum": [
+        "attack",
+        "use_item",
+        "talk",
+        "move",
+        "skill",
+        "interact"
+      ],
+      "title": "ActionType",
+      "type": "string"
+    },
+    "EffectType": {
+      "enum": [
+        "stat_change",
+        "resource_change",
+        "state_flag",
+        "item_transfer"
+      ],
+      "title": "EffectType",
+      "type": "string"
+    }
+  },
+  "description": "原子化行为契约 (Action Contract)\n\n定义了一个动作从触发到结算的完整逻辑链路。",
+  "properties": {
+    "action_id": {
+      "description": "行为唯一标识符",
+      "title": "Action Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "行为名称",
+      "title": "Name",
+      "type": "string"
+    },
+    "action_type": {
+      "$ref": "#/$defs/ActionType",
+      "description": "行为大类"
+    },
+    "trigger_description": {
+      "description": "触发该行为的自然语言描述",
+      "title": "Trigger Description",
+      "type": "string"
+    },
+    "pre_conditions": {
+      "description": "执行前置要求，如 [{'type': 'stat', 'attribute': 'strength', 'operator': '>=', 'value': 15}]",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Pre Conditions",
+      "type": "array"
+    },
+    "success_effects": {
+      "description": "成功执行后的效果列表",
+      "items": {
+        "$ref": "#/$defs/ActionEffect"
+      },
+      "title": "Success Effects",
+      "type": "array"
+    },
+    "failure_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "失败时的叙事引导或回退逻辑描述",
+      "title": "Failure Path"
+    },
+    "mana_cost": {
+      "default": 0,
+      "description": "消耗的法力值",
+      "title": "Mana Cost",
+      "type": "integer"
+    },
+    "cooldown_turns": {
+      "default": 0,
+      "description": "冷却回合数",
+      "title": "Cooldown Turns",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "action_id",
+    "name",
+    "action_type",
+    "trigger_description"
+  ],
+  "title": "ActionTemplate",
+  "type": "object"
+}

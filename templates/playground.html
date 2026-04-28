@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TRE 最小可玩 Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='playground.css') }}">
+</head>
+<body>
+<div class="app-shell">
+    <header class="topbar">
+        <button class="icon-button" type="button" aria-label="菜单">☰</button>
+        <div class="brand-block">
+            <h1>TRE 最小可玩 Demo</h1>
+            <p>文本冒险 · 回合制 RPG 原型</p>
+        </div>
+        <div class="top-scene">
+            <span>当前场景：</span>
+            <strong id="topSceneName">未加载</strong>
+            <span id="topSafetyBadge" class="safe-badge">状态未知</span>
+        </div>
+        <div class="top-actions">
+            <label class="compact-field">
+                <span>角色</span>
+                <input id="characterId" type="text" value="player_01">
+            </label>
+            <label class="compact-field session-field">
+                <span>会话</span>
+                <input id="sessionIdInput" type="text" placeholder="sess_xxx">
+            </label>
+            <button id="createSessionBtn" type="button">新会话</button>
+            <button id="loadSessionBtn" type="button">加载</button>
+            <button id="resetBtn" type="button">重置</button>
+            <button id="debugToggleBtn" class="debug-switch" type="button">调试：开</button>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <section class="game-column">
+            <section class="scene-card panel">
+                <div class="scene-visual">
+                    <div class="scene-copy">
+                        <span id="sceneBadge" class="safe-badge">等待会话</span>
+                        <h2 id="sceneTitle">尚未进入场景</h2>
+                        <p id="sceneDescription">创建或加载会话后，当前地点、出口和建议行动会显示在这里。</p>
+                        <div id="sceneMeta" class="scene-meta"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="dialogue-panel panel">
+                <div class="panel-title">
+                    <h2>回合记录</h2>
+                    <span id="streamStatus" class="stream-status">等待输入</span>
+                </div>
+                <div id="conversationLog" class="conversation-log">
+                    <article class="message system-message">
+                        <div class="message-avatar">系统</div>
+                        <div class="message-body">
+                            <strong>系统</strong>
+                            <p>创建会话后开始记录玩家输入、GM 响应和澄清问题。</p>
+                        </div>
+                    </article>
+                </div>
+                <div id="actionHints" class="choice-row"></div>
+            </section>
+
+            <section class="command-panel panel">
+                <div class="quick-actions utility-actions">
+                    <button type="button" id="listTurnsBtn">历史</button>
+                    <button type="button" id="getMemoryBtn">记忆</button>
+                    <button type="button" id="refreshMemoryBtn">刷新记忆</button>
+                    <button type="button" id="commitSandboxBtn" title="把当前沙盒剧情保存到主线世界状态">并入主线</button>
+                    <button type="button" id="discardSandboxBtn" title="放弃当前沙盒剧情并恢复到主线状态">回滚沙盒</button>
+                </div>
+                <p class="sandbox-help">沙盒操作：并入主线会保存当前沙盒变化；回滚沙盒会放弃沙盒变化，恢复到主线状态。</p>
+                <div class="input-row">
+                    <textarea id="userInput" rows="2" placeholder="输入命令或对话，例如：观察周围"></textarea>
+                    <button id="submitTurnBtn" type="button">发送</button>
+                </div>
+            </section>
+        </section>
+
+        <aside class="status-column">
+            <section class="panel character-panel">
+                <div class="panel-title">
+                    <h2>角色状态</h2>
+                    <span id="characterMode" class="tiny-pill">Active</span>
+                </div>
+                <div class="character-card">
+                    <div class="portrait">旅者</div>
+                    <div class="character-info">
+                        <h3 id="characterName">旅行者</h3>
+                        <p id="characterIdText">player_01</p>
+                        <div class="level-line">Lv. 1 · EXP 0 / 100</div>
+                    </div>
+                </div>
+                <div class="meter-block">
+                    <div class="meter-label"><span>HP</span><strong id="hpText">-- / --</strong></div>
+                    <div class="meter"><span id="hpBar"></span></div>
+                    <div class="meter-label"><span>MP</span><strong id="mpText">-- / --</strong></div>
+                    <div class="meter mp-meter"><span id="mpBar"></span></div>
+                </div>
+            </section>
+
+            <section class="panel inventory-panel">
+                <div class="panel-title">
+                    <h2>背包 / 装备</h2>
+                    <span id="inventoryCount" class="tiny-pill">0</span>
+                </div>
+                <div id="inventoryGrid" class="inventory-grid">
+                    <div class="empty-state">暂无物品信息</div>
+                </div>
+            </section>
+
+            <section class="panel quest-panel">
+                <div class="panel-title">
+                    <h2>当前任务</h2>
+                    <span class="tiny-pill">最小版</span>
+                </div>
+                <div id="questList" class="quest-list">
+                    <div class="empty-state">暂无活跃任务</div>
+                </div>
+            </section>
+
+            <section class="panel memory-panel">
+                <div class="panel-title">
+                    <h2>记忆摘要</h2>
+                    <span class="tiny-pill">近期</span>
+                </div>
+                <div id="memorySummaryText" class="memory-text">暂无记忆摘要。</div>
+            </section>
+        </aside>
+
+        <aside id="debugConsole" class="debug-column">
+            <section class="panel debug-panel">
+                <div class="panel-title">
+                    <h2>控制台 / 调试信息</h2>
+                    <span class="tiny-pill">Live</span>
+                </div>
+                <nav class="debug-tabs" aria-label="调试面板">
+                    <button class="active" type="button" data-tab="snapshot">状态快照</button>
+                    <button type="button" data-tab="agent">Agent</button>
+                    <button type="button" data-tab="logs">日志</button>
+                    <button type="button" data-tab="trace">Trace</button>
+                    <button type="button" data-tab="memory">内存</button>
+                    <button type="button" data-tab="config">配置</button>
+                </nav>
+
+                <div class="debug-content">
+                    <section id="tab-snapshot" class="debug-tab-panel active">
+                        <pre id="contextScene" class="box"></pre>
+                        <pre id="turnResult" class="box compact-box"></pre>
+                    </section>
+                    <section id="tab-agent" class="debug-tab-panel">
+                        <div id="agentStatus" class="agent-grid"></div>
+                    </section>
+                    <section id="tab-logs" class="debug-tab-panel">
+                        <pre id="statusLog" class="box log-box"></pre>
+                        <pre id="turnHistory" class="box compact-box"></pre>
+                    </section>
+                    <section id="tab-trace" class="debug-tab-panel">
+                        <pre id="contextTrace" class="box"></pre>
+                    </section>
+                    <section id="tab-memory" class="debug-tab-panel">
+                        <pre id="contextMemory" class="box"></pre>
+                        <pre id="memoryResult" class="box compact-box"></pre>
+                    </section>
+                    <section id="tab-config" class="debug-tab-panel">
+                        <div class="config-form">
+                            <label for="outputModeSelect">输出方式</label>
+                            <select id="outputModeSelect">
+                                <option value="stream">流式输出</option>
+                                <option value="sync">普通输出</option>
+                            </select>
+                        </div>
+                        <pre id="debugConfig" class="box compact-box"></pre>
+                    </section>
+                </div>
+                <pre id="sessionInfo" class="hidden-debug-store" aria-hidden="true"></pre>
+                <button id="nextPageBtn" class="wide-button" type="button">下一页历史</button>
+            </section>
+        </aside>
+    </main>
+</div>
+
+<script src="{{ url_for('static', filename='playground.js') }}"></script>
+</body>
+</html>
