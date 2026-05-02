@@ -31,6 +31,7 @@ dist/
 /.vscode/
 /.venv/
 /.venv-wsl/
+.codex
 
 # 本地 agent/设计记录，不随远程仓库发布
 /AGENTS.md
