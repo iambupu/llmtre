@@ -23,5 +23,47 @@
     "input": "我想和他说话",
     "expected_type": "talk",
     "expected_clarification": false
+  },
+  {
+    "name": "inspect_potion_not_use",
+    "input": "检查药水",
+    "expected_type": "inspect",
+    "expected_clarification": false
+  },
+  {
+    "name": "drink_potion_use_item",
+    "input": "喝下药水",
+    "expected_type": "use_item",
+    "expected_clarification": false
+  },
+  {
+    "name": "search_area_as_inspect",
+    "input": "搜索周围的痕迹",
+    "expected_type": "inspect",
+    "expected_clarification": false
+  },
+  {
+    "name": "take_object_as_interact",
+    "input": "捡起地上的东西",
+    "expected_type": "interact",
+    "expected_clarification": false
+  },
+  {
+    "name": "open_object_as_interact",
+    "input": "打开木门",
+    "expected_type": "interact",
+    "expected_clarification": false
+  },
+  {
+    "name": "ask_guard_topic_as_talk",
+    "input": "问守卫森林怎么走",
+    "expected_type": "talk",
+    "expected_clarification": false
+  },
+  {
+    "name": "approach_and_attack_prioritizes_attack",
+    "input": "靠近地精并攻击",
+    "expected_type": "attack",
+    "expected_clarification": false
   }
 ]

@@ -248,6 +248,38 @@ textarea:focus {
     font-size: 12px;
 }
 
+.scene-objects {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.scene-object {
+    padding: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.scene-object strong,
+.scene-object span {
+    display: block;
+}
+
+.object-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.object-action {
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
 .dialogue-panel {
     position: relative;
     min-height: 382px;

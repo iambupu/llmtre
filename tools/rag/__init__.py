@@ -20,15 +20,20 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONFIG_PATH = os.path.join(BASE_DIR, "config", "rag_config.yml")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
-# 配置日志
-os.makedirs(LOG_DIR, exist_ok=True)
+# 配置日志（只读文件系统时降级到 stdout，避免导入阶段阻断）。
+handlers: list[logging.Handler] = [logging.StreamHandler()]
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    handlers.insert(
+        0,
+        logging.FileHandler(os.path.join(LOG_DIR, "rag_manager.log"), encoding="utf-8"),
+    )
+except OSError:
+    pass
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "rag_manager.log"), encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=handlers,
 )
 logger = logging.getLogger("RAGManager")
 

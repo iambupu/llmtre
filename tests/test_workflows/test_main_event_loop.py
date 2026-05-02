@@ -139,6 +139,9 @@ def test_main_event_loop_can_be_initialized(tmp_path):
 def test_main_event_loop_uses_workflow_outer_bridge_by_default(tmp_path):
     loop = build_loop(tmp_path)
     assert isinstance(loop.outer_bridge, WorkflowOuterLoopBridge)
+    result = asyncio.run(loop.run("观察周围"))
+    assert result["outer_emit_result"]["status"] == "ok"
+    assert result["outer_emit_result"]["detail"]["mode"] == "sync"
 
 
 def test_main_event_loop_success_path_updates_state(tmp_path):
@@ -198,6 +201,8 @@ def test_main_event_loop_emits_minimal_outer_events(tmp_path):
     assert outer.state_events[0].entity_id == "player_01"
     assert outer.turn_events[0].turn_id == 1
     assert outer.world_events[0].time_passed_minutes == loop.outer_world_minutes_per_turn
+    assert result["outer_emit_result"]["status"] == "ok"
+    assert result["outer_emit_result"]["detail"]["mode"] == "sync"
 
 
 def test_main_event_loop_outer_failure_does_not_break_turn(tmp_path):
@@ -207,6 +212,8 @@ def test_main_event_loop_outer_failure_does_not_break_turn(tmp_path):
 
     assert result["is_valid"] is True
     assert result["final_response"]
+    assert result["outer_emit_result"]["status"] == "failed"
+    assert result["outer_emit_result"]["detail"]["mode"] == "sync"
 
 
 def test_main_event_loop_partial_outer_failure_does_not_block_following_events(tmp_path):
@@ -224,6 +231,12 @@ def test_main_event_loop_partial_outer_failure_does_not_block_following_events(t
 
 
 def test_main_event_loop_overflow_outbox_only_enqueues_supported_event_types(tmp_path):
+    """
+    功能：验证 A1 同步外环投递策略下，不再走后台任务溢出分支，也不会写入 outbox 补偿事件。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示仍残留旧的后台溢出行为。
+    """
     loop = build_loop(tmp_path)
     loop.outer_max_pending_tasks = 0
 
@@ -234,8 +247,7 @@ def test_main_event_loop_overflow_outbox_only_enqueues_supported_event_types(tmp
         rows = conn.execute("SELECT event_name FROM outer_event_outbox").fetchall()
     event_names = {str(row[0]) for row in rows}
     assert "turn_batch" not in event_names
-    assert "turn_ended" in event_names
-    assert event_names.issubset({"state_changed", "turn_ended", "world_evolution"})
+    assert event_names == set()
 
 
 def test_main_event_loop_populates_world_snapshot_from_rag_bridge(tmp_path):

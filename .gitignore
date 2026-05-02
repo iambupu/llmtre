@@ -30,12 +30,16 @@ dist/
 /.idea/
 /.vscode/
 /.venv/
+/.venv-wsl/
 
 # 本地 agent/设计记录，不随远程仓库发布
 /AGENTS.md
+/code_review.md
 /.agent_context/
 /.code_md/
 /.coding_docs/
 
+
 # 历史/临时测试目录
 /test/
+/tests/

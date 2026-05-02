@@ -39,6 +39,7 @@ class SceneExitState(TypedDict):
 
 class SceneSnapshot(TypedDict):
     """回合场景快照"""
+    schema_version: str
     current_location: dict[str, Any]
     exits: list[SceneExitState]
     visible_npcs: list[dict[str, Any]]
@@ -47,6 +48,10 @@ class SceneSnapshot(TypedDict):
     recent_memory: str
     available_actions: list[str]
     suggested_actions: list[str]
+    scene_objects: list[dict[str, Any]]
+    interaction_slots: list[dict[str, Any]]
+    affordances: list[dict[str, Any]]
+    ui_hints: dict[str, Any]
 
 
 class FlowState(TypedDict):
@@ -74,14 +79,21 @@ class FlowState(TypedDict):
 
     # 5. 回合元数据
     turn_id: int
+    runtime_turn_id: int
+    trace_id: str
+    request_id: str
+    session_id: str
     is_sandbox_mode: bool
 
     # 6. 最终输出文本
     final_response: str
     quick_actions: list[str]
     write_results: list[dict[str, Any]]
+    failure_reason: str
+    suggested_next_step: str
 
     # 7. 缓存的世界与角色快照 (用于 RAG 或叙事参考)
     world_snapshot: WorldState | None
     scene_snapshot: SceneSnapshot | None
     active_character: CharacterState | None
+    outer_emit_result: dict[str, Any]

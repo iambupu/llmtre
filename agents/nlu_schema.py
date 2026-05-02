@@ -17,6 +17,7 @@ ActionType = Literal[
     "inspect",
     "use_item",
     "attack",
+    "interact",
     "commit_sandbox",
     "discard_sandbox",
 ]

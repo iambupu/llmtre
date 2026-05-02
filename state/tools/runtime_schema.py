@@ -131,9 +131,25 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
         ON web_session_turns(session_id)
         """
     )
+    # 迁移边界：历史版本未对 (session_id, request_id) 加唯一约束。
+    # 这里先去重保留最早写入的一条，再创建唯一索引兜底幂等语义。
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_web_turns_session_req
+        DELETE FROM web_session_turns
+        WHERE id IN (
+            SELECT newer.id
+            FROM web_session_turns AS newer
+            JOIN web_session_turns AS older
+              ON newer.session_id = older.session_id
+             AND newer.request_id = older.request_id
+             AND newer.id > older.id
+        )
+        """
+    )
+    cursor.execute("DROP INDEX IF EXISTS idx_web_turns_session_req")
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_web_turns_session_req_unique
         ON web_session_turns(session_id, request_id)
         """
     )

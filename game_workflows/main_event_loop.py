@@ -15,10 +15,12 @@ from typing import Any, cast
 
 from langgraph.graph import END, StateGraph
 
+from agents.clarifier_agent import ClarifierAgent
 from agents.gm_agent import GMAgent
 from agents.nlu_agent import NLUAgent
 from core.event_bus import EventBus
 from core.runtime_logging import ensure_runtime_logging
+from game_workflows.affordances import build_scene_interaction_model
 from game_workflows.async_watchers import (
     NoOpOuterLoopBridge,
     OuterLoopBridge,
@@ -28,6 +30,8 @@ from game_workflows.event_schemas import StateChangedEvent, TurnEndedEvent, Worl
 from game_workflows.graph_schema import CharacterState, FlowState, SceneExitState, SceneSnapshot
 from game_workflows.main_loop_config import load_main_loop_rules
 from game_workflows.rag_readonly_bridge import RAGReadOnlyBridge
+from state.contracts.agent import AgentEnvelope
+from state.contracts.turn import TurnRequestContext
 from tools.entity.entity_probes import EntityProbes
 from tools.roll.dice_roller import check_success, roll_d20, roll_dice
 from tools.sqlite_db.db_updater import DBUpdater
@@ -62,6 +66,7 @@ class MainEventLoop:
         self.event_bus = event_bus
         self.rules = load_main_loop_rules()
         self.nlu_agent = NLUAgent(rules=self.rules)
+        self.clarifier_agent = ClarifierAgent()
         self.gm_agent = GMAgent(event_bus=event_bus, rules=self.rules)
         self.db_updater = db_updater or DBUpdater()
         self.entity_probes = entity_probes or EntityProbes(db_path=self.db_updater.db_path)
@@ -330,12 +335,18 @@ class MainEventLoop:
 
         if not action:
             return self._clarification_result(
-                "我还没有理解你的行动，你想观察、移动、交谈，还是休息？"
+                self._clarify_with_agent(
+                    state,
+                    None,
+                    "我还没有理解你的行动，你想观察、移动、交谈，还是休息？",
+                )
             )
 
         if bool(action.get("needs_clarification", False)):
             question = str(action.get("clarification_question") or "").strip()
-            return self._clarification_result(question or "你能再具体说明目标或方向吗？")
+            return self._clarification_result(
+                self._clarify_with_agent(state, action, question or "你能再具体说明目标或方向吗？")
+            )
 
         errors: list[str] = []
         action_type = action.get("type")
@@ -356,7 +367,13 @@ class MainEventLoop:
             errors.append("动作类型暂不支持")
 
         if action_type in {"attack", "talk"} and not action.get("target_id"):
-            return self._clarification_result(self._build_target_clarification(state, action_type))
+            return self._clarification_result(
+                self._clarify_with_agent(
+                    state,
+                    action,
+                    self._build_target_clarification(state, action_type),
+                )
+            )
 
         if action_type == "attack":
             target = self.entity_probes.get_character_stats(str(action["target_id"]))
@@ -366,7 +383,9 @@ class MainEventLoop:
         if action_type == "move":
             location_id = action.get("parameters", {}).get("location_id")
             if not location_id or location_id == "unknown":
-                return self._clarification_result(self._build_move_clarification(state))
+                return self._clarification_result(
+                    self._clarify_with_agent(state, action, self._build_move_clarification(state))
+                )
             elif not self._is_reachable_location(state, str(location_id)):
                 errors.append("目标地点不在当前场景出口中")
 
@@ -379,7 +398,9 @@ class MainEventLoop:
         if action_type == "use_item":
             item_id = action.get("parameters", {}).get("item_id")
             if not item_id:
-                return self._clarification_result("你想使用哪个物品？")
+                return self._clarification_result(
+                    self._clarify_with_agent(state, action, "你想使用哪个物品？")
+                )
             else:
                 inventory_item = self.entity_probes.get_inventory_item(
                     active_character["id"],
@@ -423,8 +444,45 @@ class MainEventLoop:
             "clarification_question": "",
             "should_advance_turn": False,
             "should_write_story_memory": False,
+            "failure_reason": message,
+            "suggested_next_step": "观察周围",
             "debug_trace": [{"stage": "validate_action", "status": "invalid", "message": message}],
         }
+
+    def _clarify_with_agent(
+        self,
+        state: FlowState,
+        action: dict[str, Any] | None,
+        fallback_question: str,
+    ) -> str:
+        """
+        功能：调用最小 Clarifier 生成澄清问题，失败时使用调用方提供的确定性问题。
+        入参：state（FlowState）：当前回合状态；action（dict[str, Any] | None）：候选动作；
+            fallback_question（str）：Clarifier 无法生成时的兜底问题。
+        出参：str，玩家可见澄清问题。
+        异常：内部捕获 Clarifier 异常并降级为 fallback_question，避免阻断回合。
+        """
+        try:
+            response = self.clarifier_agent.clarify(
+                AgentEnvelope(
+                    trace_id=str(state.get("trace_id", "")),
+                    turn_id=int(state.get("turn_id", 0)),
+                    sender="main_loop",
+                    recipient="clarifier",
+                    kind="clarify.request",
+                    payload={
+                        "user_input": str(state.get("user_input", "")),
+                        "action_intent": action,
+                        "validation_errors": state.get("validation_errors", []),
+                        "scene_snapshot": state.get("scene_snapshot") or {},
+                    },
+                )
+            )
+            question = str(response.payload.get("clarification_question") or "").strip()
+            return question or fallback_question
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Clarifier 生成澄清问题失败，使用兜底问题: %s", error)
+            return fallback_question
 
     def _clarification_result(self, question: str) -> dict[str, Any]:
         """
@@ -440,6 +498,8 @@ class MainEventLoop:
             "clarification_question": question,
             "should_advance_turn": False,
             "should_write_story_memory": False,
+            "failure_reason": "行动信息还不够明确。",
+            "suggested_next_step": question,
             "debug_trace": [
                 {"stage": "validate_action", "status": "clarification", "question": question}
             ],
@@ -643,11 +703,13 @@ class MainEventLoop:
         if action_type in {"commit_sandbox", "discard_sandbox"}:
             return {
                 "turn_id": current_turn,
+                "runtime_turn_id": current_turn,
                 "is_sandbox_mode": False,
                 "write_results": write_results,
             }
         return {
             "turn_id": current_turn,
+            "runtime_turn_id": current_turn,
             "write_results": write_results,
         }
 
@@ -685,12 +747,16 @@ class MainEventLoop:
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
         logger.info("正在生成叙事响应...")
-        response = self.gm_agent.render(
+        output = self.gm_agent.render_block(
             dict(state),
             stream_callback=_NARRATIVE_STREAM_CALLBACK.get(),
         )
-        quick_actions = self.gm_agent.suggest_quick_actions(dict(state), response)
-        return {"final_response": response, "quick_actions": quick_actions}
+        return {
+            "final_response": output.narrative,
+            "quick_actions": output.quick_actions,
+            "failure_reason": output.failure_reason,
+            "suggested_next_step": output.suggested_next_step,
+        }
 
     def _build_scene_snapshot(
         self,
@@ -732,7 +798,8 @@ class MainEventLoop:
         ]
         available_actions = scene_defaults.get("available_actions", [])
         suggested_actions = scene_defaults.get("suggested_actions", [])
-        return {
+        snapshot: dict[str, Any] = {
+            "schema_version": "scene_snapshot.v2",
             "current_location": {
                 "id": str(location_info.get("id", location_id)),
                 "name": str(location_info.get("name", location_id)),
@@ -750,6 +817,10 @@ class MainEventLoop:
                 str(action) for action in suggested_actions if isinstance(action, str)
             ],
         }
+        # A2 场景可操作化预留：从现有出口/NPC/物品投影对象与交互槽，
+        # A1 仍通过 quick_actions 兜底，避免前端必须一次性切到对象化交互。
+        snapshot.update(build_scene_interaction_model(snapshot))
+        return cast(SceneSnapshot, snapshot)
 
     def _normalize_scene_exits(self, raw_exits: Any) -> list[SceneExitState]:
         """
@@ -793,13 +864,14 @@ class MainEventLoop:
             return []
         return [dict(item) for item in value if isinstance(item, dict)]
 
-    async def _emit_outer_events(self, state: FlowState) -> None:
+    async def _emit_outer_events(self, state: FlowState) -> dict[str, Any]:
         """
-        功能：投递最小外环事件，失败不影响内环。
-        入参：state。
-        出参：None。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        功能：同步投递最小外环事件，并返回本回合外环投递摘要。
+        入参：state（FlowState）：当前回合状态快照。
+        出参：dict[str, Any]，包含 status/detail，用于 trace 写入真实投递语义。
+        异常：内部捕获所有投递异常并降级入 outbox，不向上抛出以免阻断内环。
         """
+        failed_events: list[dict[str, str]] = []
         if state.get("is_valid") and state.get("physics_diff"):
             try:
                 await asyncio.wait_for(
@@ -814,6 +886,7 @@ class MainEventLoop:
                 )
             except Exception as error:  # noqa: BLE001
                 logger.warning("外环事件投递失败[event=state_changed]，已降级忽略: %s", error)
+                failed_events.append({"event": "state_changed", "error": str(error)})
                 self.db_updater.enqueue_outer_event(
                     "state_changed",
                     StateChangedEvent(
@@ -837,6 +910,7 @@ class MainEventLoop:
             )
         except Exception as error:  # noqa: BLE001
             logger.warning("外环事件投递失败[event=turn_ended]，已降级忽略: %s", error)
+            failed_events.append({"event": "turn_ended", "error": str(error)})
             self.db_updater.enqueue_outer_event(
                 "turn_ended",
                 TurnEndedEvent(
@@ -861,21 +935,29 @@ class MainEventLoop:
                 )
             except Exception as error:  # noqa: BLE001
                 logger.warning("外环事件投递失败[event=world_evolution]，已降级忽略: %s", error)
+                failed_events.append({"event": "world_evolution", "error": str(error)})
                 self.db_updater.enqueue_outer_event(
                     "world_evolution",
                     WorldEvolutionEvent(
                         time_passed_minutes=self.outer_world_minutes_per_turn,
                         location_id=str(active_character.get("location", "unknown")),
                     ).model_dump(),
-                    str(error),
-                )
+                        str(error),
+                    )
 
-    def _emit_outer_events_background(self, state: FlowState) -> None:
+        if failed_events:
+            return {
+                "status": "failed",
+                "detail": {"mode": "sync", "failed_events": failed_events},
+            }
+        return {"status": "ok", "detail": {"mode": "sync"}}
+
+    def _emit_outer_events_background(self, state: FlowState) -> dict[str, Any]:
         """
-        功能：将外环投递放到后台任务，避免阻塞主回合返回。
-        入参：state。
-        出参：None。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        功能：将外环投递放到后台任务，避免阻塞主回合返回，并返回调度结果。
+        入参：state（FlowState）：当前回合状态快照。
+        出参：dict[str, Any]，包含 status/detail，用于标记 started/skipped/failed。
+        异常：内部仅记录并降级，不向上抛出。
         """
         if len(self._outer_emit_tasks) >= self.outer_max_pending_tasks:
             logger.warning(
@@ -917,7 +999,14 @@ class MainEventLoop:
                 str(state.get("active_character_id", "")),
                 int(state.get("turn_id", 0)),
             )
-            return
+            return {
+                "status": "failed",
+                "detail": {
+                    "mode": "workflow_background",
+                    "reason": "pending tasks overflow",
+                    "queued_to_outbox": True,
+                },
+            }
         task = asyncio.create_task(self._emit_outer_events(state))
         self._outer_emit_tasks.add(task)
 
@@ -937,6 +1026,14 @@ class MainEventLoop:
                 logger.warning("外环事件投递后台任务失败: %s", error)
 
         task.add_done_callback(_on_done)
+        return {
+            "status": "started",
+            "detail": {
+                "mode": "workflow_background",
+                "task_created": True,
+                "pending_tasks": len(self._outer_emit_tasks),
+            },
+        }
 
     async def _replay_outbox_once(self) -> None:
         """
@@ -1052,16 +1149,22 @@ class MainEventLoop:
         is_sandbox_mode: bool = False,
         recent_memory: str = "",
         narrative_stream_callback: Callable[[str], None] | None = None,
+        request_context: TurnRequestContext | None = None,
     ) -> FlowState:
         """
         功能：异步运行内环流程，并在初始状态中绑定角色与场景快照。
         入参：user_input（str）：玩家输入；initial_character_id（str，默认 player_01）：角色 ID；
             is_sandbox_mode（bool，默认 False）：是否使用 Shadow 状态；
             recent_memory（str，默认空）：剧情摘要；
-            narrative_stream_callback（Callable[[str], None] | None，默认 None）：GM 叙事片段回调。
+            narrative_stream_callback（Callable[[str], None] | None，默认 None）：GM 叙事片段回调；
+            request_context（TurnRequestContext | None，默认 None）：A1 请求级上下文。
         出参：FlowState，包含动作、结算、叙事和最新角色/场景状态。
         异常：图执行、数据库读写或事件投递异常按节点策略向上抛出或降级记录。
         """
+        if request_context is not None:
+            initial_character_id = request_context.character_id
+            is_sandbox_mode = request_context.sandbox_mode
+            recent_memory = request_context.recent_memory
         active_character = self._build_character_state(
             initial_character_id,
             use_shadow=is_sandbox_mode,
@@ -1074,6 +1177,9 @@ class MainEventLoop:
             use_shadow=is_sandbox_mode,
         )
         initial_turn_id = self.db_updater.get_total_turns()
+        trace_id = request_context.trace_id if request_context is not None else ""
+        request_id = request_context.request_id if request_context is not None else ""
+        session_id = request_context.session_id if request_context is not None else ""
         initial_state: FlowState = {
             "user_input": user_input,
             "active_character_id": initial_character_id,
@@ -1086,10 +1192,16 @@ class MainEventLoop:
             ),
             "physics_diff": None,
             "turn_id": initial_turn_id,
+            "runtime_turn_id": initial_turn_id,
+            "trace_id": trace_id,
+            "request_id": request_id,
+            "session_id": session_id,
             "is_sandbox_mode": is_sandbox_mode,
             "final_response": "",
             "quick_actions": [],
             "write_results": [],
+            "failure_reason": "",
+            "suggested_next_step": "",
             "world_snapshot": None,
             "scene_snapshot": scene_snapshot,
             "active_character": active_character,
@@ -1098,6 +1210,7 @@ class MainEventLoop:
             "should_advance_turn": True,
             "should_write_story_memory": False,
             "debug_trace": [],
+            "outer_emit_result": {"status": "skipped", "detail": {"mode": "not_executed"}},
         }
         stream_token = _NARRATIVE_STREAM_CALLBACK.set(narrative_stream_callback)
         try:
@@ -1116,9 +1229,13 @@ class MainEventLoop:
                 recent_memory=recent_memory,
                 use_shadow=result.get("is_sandbox_mode", False),
             )
-        if isinstance(self.outer_bridge, WorkflowOuterLoopBridge):
-            self._emit_outer_events_background(result)
-            self._schedule_outbox_replay()
+        result["runtime_turn_id"] = int(result.get("turn_id", 0))
+        # A1 可验收要求：outer.emitted 必须反映当前回合可观测结果，
+        # 不能依赖 asyncio.run 结束后会被取消的后台任务。
+        if isinstance(self.outer_bridge, NoOpOuterLoopBridge):
+            result["outer_emit_result"] = {"status": "skipped", "detail": {"mode": "noop"}}
+        elif isinstance(self.outer_bridge, WorkflowOuterLoopBridge):
+            result["outer_emit_result"] = await self._emit_outer_events(result)
         else:
-            await self._emit_outer_events(result)
+            result["outer_emit_result"] = await self._emit_outer_events(result)
         return result

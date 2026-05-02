@@ -106,11 +106,11 @@ def refresh_memory(session_id: str) -> tuple[Any, int]:
         )
         if turns:
             covered = {
-                "from_turn_id": turns[max(0, len(turns) - max_turns)]["turn_id"],
-                "to_turn_id": turns[-1]["turn_id"],
+                "from_session_turn_id": turns[max(0, len(turns) - max_turns)]["session_turn_id"],
+                "to_session_turn_id": turns[-1]["session_turn_id"],
             }
         else:
-            covered = {"from_turn_id": 0, "to_turn_id": 0}
+            covered = {"from_session_turn_id": 0, "to_session_turn_id": 0}
         payload = {"session_id": session_id, "summary": summary, "covered_turn_range": covered}
         context.session_store.save_idempotent_response(
             scope="refresh_memory",

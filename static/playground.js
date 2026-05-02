@@ -161,7 +161,7 @@ function setBusy(isBusy, message = "") {
         setStreamStatus(message);
     }
     document.querySelectorAll(
-        ".top-actions button, .command-panel button, #actionHints button, #nextPageBtn",
+        ".top-actions button, .command-panel button, #actionHints button, #sceneObjects button, #nextPageBtn",
     ).forEach((button) => {
         button.disabled = isBusy;
     });
@@ -214,6 +214,7 @@ function renderPlayState(payload) {
     setText("sceneBadge", "安全区域");
     setText("topSafetyBadge", "安全区域");
     renderSceneMeta(exits, npcs, items);
+    renderSceneObjects(scene);
     renderActionHints(payload);
     renderCharacter(character, payload);
     renderInventory(character);
@@ -255,6 +256,67 @@ function renderSceneMeta(exits, npcs, items) {
 }
 
 /**
+ * 功能：渲染 A2 预留的场景对象与交互槽，让玩家能看到方向、对象和可操作入口。
+ * 入参：scene（object）：scene_snapshot v2。
+ * 出参：void。
+ * 异常：DOM 缺失或字段为空时静默降级。
+ */
+function renderSceneObjects(scene) {
+    const sceneObjects = document.getElementById("sceneObjects");
+    if (!sceneObjects) {
+        return;
+    }
+    const objects = Array.isArray(scene.scene_objects) ? scene.scene_objects : [];
+    const slots = Array.isArray(scene.interaction_slots) ? scene.interaction_slots : [];
+    if (!objects.length) {
+        sceneObjects.innerHTML = "";
+        return;
+    }
+    const slotsByObject = new Map();
+    slots.forEach((slot) => {
+        const key = slot.object_id || "";
+        if (!slotsByObject.has(key)) {
+            slotsByObject.set(key, []);
+        }
+        slotsByObject.get(key).push(slot);
+    });
+    sceneObjects.innerHTML = objects.slice(0, 8).map((item) => {
+        const itemSlots = slotsByObject.get(item.object_id) || [];
+        const slotButtons = itemSlots.slice(0, 3).map((slot) => `
+            <button type="button"
+                class="object-action"
+                data-input="${escapeHtml(slot.default_input || "")}"
+                ${slot.enabled ? "" : "disabled"}
+                title="${escapeHtml(slot.disabled_reason || slot.label || "")}">
+                ${escapeHtml(slot.label || slot.action_type || "互动")}
+            </button>
+        `).join("");
+        return `
+            <article class="scene-object">
+                <strong>${escapeHtml(item.label || item.object_id)}</strong>
+                <span>${escapeHtml(item.object_type || "object")}</span>
+                <div class="object-actions">${slotButtons}</div>
+            </article>
+        `;
+    }).join("");
+    sceneObjects.querySelectorAll(".object-action").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const input = button.getAttribute("data-input") || "";
+            if (!input) {
+                return;
+            }
+            try {
+                await withBusy("提交对象交互中", async () => submitConfiguredTurn(input));
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logStatus(`对象交互失败：${message}`);
+                setStreamStatus(`失败：${message}`);
+            }
+        });
+    });
+}
+
+/**
  * 功能：渲染叙事响应返回的建议行动，避免展示静态场景建议造成选项来源混乱。
  * 入参：payload（object）：会话或回合响应，只有 quick_actions 会生成按钮。
  * 出参：void。
@@ -266,7 +328,12 @@ function renderActionHints(payload) {
         return;
     }
     actionHints.textContent = "";
-    const suggestions = Array.isArray(payload.quick_actions) ? payload.quick_actions : [];
+    const affordances = Array.isArray(payload.affordances)
+        ? payload.affordances
+        : (Array.isArray(payload.scene_snapshot?.affordances) ? payload.scene_snapshot.affordances : []);
+    const suggestions = Array.isArray(payload.quick_actions) && payload.quick_actions.length
+        ? payload.quick_actions
+        : affordances.filter((item) => item.enabled).map((item) => item.user_input || item.label);
     suggestions.forEach((text, index) => {
         const button = document.createElement("button");
         button.type = "button";
@@ -669,7 +736,7 @@ async function submitTurn(inputOverride = "") {
     renderTurnPayload(data, userInput);
     document.getElementById("userInput").value = "";
     await listTurns();
-    logStatus(`回合提交成功：turn_id=${data.turn_id}`);
+    logStatus(`回合提交成功：session_turn_id=${data.session_turn_id}`);
 }
 
 /**

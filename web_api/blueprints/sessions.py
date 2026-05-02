@@ -60,7 +60,7 @@ def create_session() -> tuple[Any, int]:
         "session_id": session_id,
         "character_id": character_id,
         "sandbox_mode": sandbox_mode,
-        "current_turn_id": 0,
+        "current_session_turn_id": 0,
         "created_at": created_at,
     }
     # 新会话首屏必须先有 GM 开场叙事，再把同一叙事生成的选项返回前端。
@@ -98,7 +98,7 @@ def get_session_detail(session_id: str) -> tuple[Any, int]:
         "session_id": session["session_id"],
         "character_id": session["character_id"],
         "sandbox_mode": session["sandbox_mode"],
-        "current_turn_id": session["current_turn_id"],
+        "current_session_turn_id": session["current_turn_id"],
         "last_active_at": session["last_active_at"],
     }
     payload.update(

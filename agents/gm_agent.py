@@ -14,6 +14,7 @@ from typing import Any, cast
 from config.agent_model_loader import get_agent_model_binding
 from core.event_bus import EventBus
 from game_workflows.main_loop_config import load_main_loop_rules
+from state.contracts.agent import GMOutputBlock
 
 logger = logging.getLogger("Agent.GM")
 
@@ -65,6 +66,29 @@ class GMAgent:
             if llm_text:
                 return llm_text
         return self._render_with_template(state)
+
+    def render_block(
+        self,
+        state: dict[str, Any],
+        stream_callback: Callable[[str], None] | None = None,
+    ) -> GMOutputBlock:
+        """
+        功能：生成标准 GM 输出块，统一叙事、失败原因、下一步建议和快捷行动。
+        入参：state（dict[str, Any]）：当前主循环状态；
+            stream_callback（Callable[[str], None] | None，默认 None）：流式片段回调。
+        出参：GMOutputBlock，供 A1 TurnResult 直接映射。
+        异常：LLM 异常由 render 内部降级；模板异常向上抛出由主循环处理。
+        """
+        narrative = self.render(state, stream_callback=stream_callback)
+        quick_actions = self.suggest_quick_actions(state, narrative)
+        failure_reason = self._build_failure_reason(state)
+        suggested_next_step = quick_actions[0] if quick_actions else self._build_next_step(state)
+        return GMOutputBlock(
+            narrative=narrative,
+            failure_reason=failure_reason,
+            suggested_next_step=suggested_next_step,
+            quick_actions=quick_actions,
+        )
 
     def _render_with_llm(
         self,
@@ -334,6 +358,9 @@ class GMAgent:
         出参：list[str]，最多 4 条可直接作为玩家输入的中文短句。
         异常：LLM 调用、JSON 解析或格式异常均内部降级到场景建议动作，不影响回合完成。
         """
+        constrained_actions = self._affordance_quick_actions(state)
+        if constrained_actions:
+            return constrained_actions
         if self._last_generated_quick_actions:
             return self._last_generated_quick_actions
         if self.llm_enabled:
@@ -341,6 +368,62 @@ class GMAgent:
             if actions:
                 return actions
         return self._fallback_quick_actions(state)
+
+    def _affordance_quick_actions(self, state: dict[str, Any]) -> list[str]:
+        """
+        功能：优先从 scene_snapshot.affordances 提取可点击行动，确保 GM 不生成越界动作。
+        入参：state（dict[str, Any]）：当前状态。
+        出参：list[str]，最多 4 条可直接提交的行动。
+        异常：不抛异常；字段缺失时返回空列表走旧兜底。
+        """
+        scene = self._as_mapping(state.get("scene_snapshot"))
+        raw_affordances = scene.get("affordances", [])
+        if not isinstance(raw_affordances, list):
+            return []
+        actions: list[str] = []
+        seen: set[str] = set()
+        for item in raw_affordances:
+            if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+                continue
+            text = str(item.get("user_input") or item.get("label") or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            actions.append(text[:40])
+            if len(actions) >= 4:
+                break
+        return actions
+
+    def _build_failure_reason(self, state: dict[str, Any]) -> str:
+        """
+        功能：从验证错误和澄清状态提取标准失败原因。
+        入参：state（dict[str, Any]）：当前回合状态。
+        出参：str，合法动作返回空字符串。
+        异常：不抛异常，字段缺失时按空字符串降级。
+        """
+        if state.get("is_valid", False):
+            return ""
+        existing = str(state.get("failure_reason") or "").strip()
+        if existing:
+            return existing
+        errors = state.get("validation_errors", [])
+        if isinstance(errors, list) and errors:
+            return "；".join(str(item) for item in errors)
+        question = str(state.get("clarification_question") or "").strip()
+        return "行动信息还不够明确。" if question else "行动未能成立。"
+
+    def _build_next_step(self, state: dict[str, Any]) -> str:
+        """
+        功能：生成降级下一步建议，优先使用 affordance。
+        入参：state（dict[str, Any]）：当前回合状态。
+        出参：str。
+        异常：不抛异常。
+        """
+        actions = self._affordance_quick_actions(state)
+        if actions:
+            return actions[0]
+        question = str(state.get("clarification_question") or "").strip()
+        return question or "观察周围"
 
     def _suggest_quick_actions_with_llm(
         self,

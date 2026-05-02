@@ -13,7 +13,11 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.selectors import LLMSingleSelector
 from llama_index.core.tools import QueryEngineTool
-from llama_index.retrievers.bm25 import BM25Retriever
+
+try:
+    from llama_index.retrievers.bm25 import BM25Retriever
+except ModuleNotFoundError:  # pragma: no cover - 依赖可选，运行时降级
+    BM25Retriever = None
 
 from .fusions.rrf_fusion import reciprocal_rank_fusion
 from .routers.sql_router import SQLRouter
@@ -219,7 +223,12 @@ class UnifiedRetriever:
             raise RuntimeError("向量索引未初始化，无法构建混合检索器。")
         vector_retriever = self._vector_index.as_retriever(similarity_top_k=5)
         nodes = list(self._vector_index.docstore.docs.values())
-        bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=5)
+        # A1 稳态要求：可选依赖缺失时不阻断主流程，降级到向量检索占位检索器。
+        if BM25Retriever is None:
+            logger.warning("BM25Retriever 不可用，混合检索降级为向量+图谱。")
+            bm25_retriever = vector_retriever
+        else:
+            bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=5)
         graph_retriever: BaseRetriever | None = None
         if self._graph_index:
             try:

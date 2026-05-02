@@ -24,7 +24,16 @@ def ensure_runtime_logging() -> None:
         return
 
     log_dir = Path(__file__).resolve().parents[1] / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 降级路径：只读文件系统下不阻断主流程，改为仅挂空处理器避免导入失败。
+        for logger_name in _LOGGERS:
+            logger = logging.getLogger(logger_name)
+            if not logger.handlers:
+                logger.addHandler(logging.NullHandler())
+        _INITIALIZED = True
+        return
 
     formatter = logging.Formatter(_LOG_FORMAT)
     for logger_name, file_name in _LOGGERS.items():
@@ -50,7 +59,12 @@ def _attach_file_handler(
         if isinstance(handler, logging.FileHandler) and handler.baseFilename == target:
             return
 
-    file_handler = logging.FileHandler(target, encoding="utf-8")
+    try:
+        file_handler = logging.FileHandler(target, encoding="utf-8")
+    except OSError:
+        if not logger.handlers:
+            logger.addHandler(logging.NullHandler())
+        return
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)

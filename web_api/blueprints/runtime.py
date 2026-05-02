@@ -55,7 +55,11 @@ def reset_session(session_id: str) -> tuple[Any, int]:
         )
         if not ok:
             return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
-        payload = {"session_id": session["session_id"], "reset": True, "current_turn_id": 0}
+        payload = {
+            "session_id": session["session_id"],
+            "reset": True,
+            "current_session_turn_id": 0,
+        }
         context.session_store.save_idempotent_response(
             scope="reset_session",
             session_id=session_id,

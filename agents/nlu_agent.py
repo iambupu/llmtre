@@ -62,24 +62,6 @@ class NLUAgent:
 
         action_keywords = self.nlu_rules.get("action_keywords", {})
 
-        if self._matches_action(normalized, action_keywords, "attack"):
-            return self._finalize_candidate({
-                "type": "attack",
-                "raw_input": user_input,
-                "actor_id": actor_id,
-                "target_id": self._extract_target_id(normalized),
-                "parameters": {},
-            }, user_input, actor_id)
-
-        if self._matches_action(normalized, action_keywords, "talk"):
-            return self._finalize_candidate({
-                "type": "talk",
-                "raw_input": user_input,
-                "actor_id": actor_id,
-                "target_id": self._extract_target_id(normalized),
-                "parameters": {},
-            }, user_input, actor_id)
-
         if self._matches_action(normalized, action_keywords, "commit_sandbox"):
             return self._finalize_candidate({
                 "type": "commit_sandbox",
@@ -98,6 +80,40 @@ class NLUAgent:
                 "parameters": {},
             }, user_input, actor_id)
 
+        # 物品动作优先于泛检查，避免“喝下药水”被识别为 inspect。
+        if self._matches_action(normalized, action_keywords, "use_item"):
+            return self._finalize_candidate({
+                "type": "use_item",
+                "raw_input": user_input,
+                "actor_id": actor_id,
+                "target_id": actor_id,
+                "parameters": {
+                    "item_id": self._extract_item_id(normalized),
+                    "intent": self._extract_intent(normalized, "use_item"),
+                },
+            }, user_input, actor_id)
+
+        if self._matches_action(normalized, action_keywords, "attack"):
+            return self._finalize_candidate({
+                "type": "attack",
+                "raw_input": user_input,
+                "actor_id": actor_id,
+                "target_id": self._extract_target_id(normalized),
+                "parameters": {"manner": self._extract_manner(normalized)},
+            }, user_input, actor_id)
+
+        if self._matches_action(normalized, action_keywords, "talk"):
+            return self._finalize_candidate({
+                "type": "talk",
+                "raw_input": user_input,
+                "actor_id": actor_id,
+                "target_id": self._extract_target_id(normalized),
+                "parameters": {
+                    "topic": self._extract_topic(normalized),
+                    "manner": self._extract_manner(normalized),
+                },
+            }, user_input, actor_id)
+
         if self._matches_action(normalized, action_keywords, "move"):
             return self._finalize_candidate({
                 "type": "move",
@@ -106,6 +122,31 @@ class NLUAgent:
                 "target_id": None,
                 "parameters": {
                     "location_id": self._extract_location_id(normalized, scene_snapshot),
+                    "manner": self._extract_manner(normalized),
+                },
+            }, user_input, actor_id)
+
+        if self._matches_action(normalized, action_keywords, "inspect"):
+            return self._finalize_candidate({
+                "type": "inspect",
+                "raw_input": user_input,
+                "actor_id": actor_id,
+                "target_id": self._extract_target_id(normalized),
+                "parameters": {
+                    "intent": self._extract_intent(normalized, "inspect"),
+                    "object_hint": self._extract_object_hint(normalized, scene_snapshot),
+                },
+            }, user_input, actor_id)
+
+        if self._matches_action(normalized, action_keywords, "interact"):
+            return self._finalize_candidate({
+                "type": "interact",
+                "raw_input": user_input,
+                "actor_id": actor_id,
+                "target_id": self._extract_target_id(normalized),
+                "parameters": {
+                    "intent": self._extract_intent(normalized, "interact"),
+                    "object_hint": self._extract_object_hint(normalized, scene_snapshot),
                 },
             }, user_input, actor_id)
 
@@ -117,27 +158,6 @@ class NLUAgent:
 
         if self._matches_action(normalized, action_keywords, "observe"):
             return self._build_self_action("observe", user_input, actor_id)
-
-        if self._matches_action(normalized, action_keywords, "inspect"):
-            return self._build_self_action("inspect", user_input, actor_id)
-
-        if self._matches_action(normalized, action_keywords, "use_item"):
-            return self._finalize_candidate({
-                "type": "use_item",
-                "raw_input": user_input,
-                "actor_id": actor_id,
-                "target_id": actor_id,
-                "parameters": {"item_id": self._extract_item_id(normalized)},
-            }, user_input, actor_id)
-
-        if self._matches_action(normalized, action_keywords, "interact"):
-            return self._finalize_candidate({
-                "type": "observe",
-                "raw_input": user_input,
-                "actor_id": actor_id,
-                "target_id": None,
-                "parameters": {},
-            }, user_input, actor_id)
 
         if self.llm_enabled:
             return self._parse_with_llm(user_input, actor_id, scene_snapshot)
@@ -325,7 +345,8 @@ class NLUAgent:
         compact_scene = scene_snapshot if isinstance(scene_snapshot, dict) else {}
         return (
             "你是 TRPG NLU，只把玩家输入转成候选动作 JSON，不做数值结算、不判定成败。"
-            "动作 type 只能是 observe, wait, rest, move, talk, inspect, use_item, attack。"
+            "动作 type 只能是 observe, wait, rest, move, talk, inspect, "
+            "use_item, attack, interact。"
             "输出字段必须包含 type, target_id, parameters, confidence, "
             "needs_clarification, clarification_question。"
             "如果是移动，parameters.location_id 必须优先来自 scene_snapshot.exits。"
@@ -480,3 +501,79 @@ class NLUAgent:
         """
         item_aliases = self.nlu_rules.get("item_aliases", {})
         return self._match_alias_id(normalized_input, item_aliases)
+
+    def _extract_intent(self, normalized_input: str, fallback: str) -> str:
+        """
+        功能：将扩展自然表达收敛为参数 intent，避免膨胀 ActionType。
+        入参：normalized_input（str）：已归一化输入；fallback（str）：默认意图。
+        出参：str，供主循环和 A2 交互槽参考的意图标签。
+        异常：不抛异常。
+        """
+        intent_keywords = {
+            "search": ["搜索", "搜查", "翻找", "寻找"],
+            "take": ["拾取", "捡起", "拿起", "拿走"],
+            "open": ["打开", "推开", "拉开"],
+            "close": ["关闭", "关上"],
+            "equip": ["装备", "穿上", "戴上"],
+            "give": ["给予", "交给", "递给"],
+        }
+        for intent, keywords in intent_keywords.items():
+            if any(keyword in normalized_input for keyword in keywords):
+                return intent
+        return fallback
+
+    def _extract_manner(self, normalized_input: str) -> str:
+        """
+        功能：提取动作方式，例如潜行、威胁或劝说，作为非裁决参数保存。
+        入参：normalized_input（str）：已归一化输入。
+        出参：str，未命中返回空字符串。
+        异常：不抛异常。
+        """
+        manner_keywords = {
+            "stealth": ["潜行", "悄悄", "偷偷", "躲藏"],
+            "threaten": ["威胁", "恐吓"],
+            "persuade": ["劝说", "说服"],
+        }
+        for manner, keywords in manner_keywords.items():
+            if any(keyword in normalized_input for keyword in keywords):
+                return manner
+        return ""
+
+    def _extract_topic(self, normalized_input: str) -> str:
+        """
+        功能：为社交动作提取最小话题提示，A1 不做语义裁决，仅保留原文线索。
+        入参：normalized_input（str）：已归一化输入。
+        出参：str，命中询问类表达时返回原输入，否则为空。
+        异常：不抛异常。
+        """
+        has_topic_keyword = any(
+            keyword in normalized_input for keyword in ["问", "询问", "打听"]
+        )
+        return normalized_input if has_topic_keyword else ""
+
+    def _extract_object_hint(self, normalized_input: str, scene_snapshot: Any = None) -> str:
+        """
+        功能：从输入或场景对象中提取对象提示，供 Clarifier 和 A2 对象化交互使用。
+        入参：normalized_input（str）：已归一化输入；scene_snapshot（Any）：当前场景快照。
+        出参：str，未命中返回空字符串。
+        异常：不抛异常；场景结构非法时忽略。
+        """
+        if isinstance(scene_snapshot, dict):
+            for key in ["scene_objects", "visible_items", "visible_npcs"]:
+                value = scene_snapshot.get(key, [])
+                if not isinstance(value, list):
+                    continue
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    candidates = [
+                        str(item.get("label") or ""),
+                        str(item.get("name") or ""),
+                        str(item.get("object_id") or ""),
+                        str(item.get("item_id") or ""),
+                        str(item.get("entity_id") or ""),
+                    ]
+                    for candidate in candidates:
+                        if candidate and candidate.lower() in normalized_input:
+                            return candidate
+        return ""

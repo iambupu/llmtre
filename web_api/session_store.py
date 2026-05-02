@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from typing import Any, cast
 
 
@@ -88,6 +89,152 @@ class WebSessionStore:
                 (scope, session_id, request_id, response_json),
             )
             connection.commit()
+
+    def _persist_turn_result_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        request_id: str,
+        user_input: str,
+        turn_result: dict[str, Any],
+        memory_summary: str,
+        now_iso: str,
+    ) -> int:
+        """
+        功能：在调用方事务中持久化回合结果并推进会话游标。
+        入参：connection（sqlite3.Connection）：已开启事务的连接；session_id（str）：会话标识；
+            request_id（str）：请求标识；user_input（str）：玩家输入；
+            turn_result（dict[str, Any]）：
+            主循环回合结果；memory_summary（str）：摘要；now_iso（str）：更新时间。
+        出参：int，持久化后的会话内回合号。
+        异常：session 不存在、唯一约束冲突或 SQL 执行失败时抛出 sqlite3.Error；
+            不在本函数捕获，交由上层事务决定回滚策略。
+        """
+        action_intent_json = (
+            json.dumps(turn_result.get("action_intent"), ensure_ascii=False)
+            if turn_result.get("action_intent") is not None
+            else None
+        )
+        physics_diff_json = (
+            json.dumps(turn_result.get("physics_diff"), ensure_ascii=False)
+            if turn_result.get("physics_diff") is not None
+            else None
+        )
+        session_row = connection.execute(
+            """
+            SELECT current_turn_id
+            FROM web_sessions
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        if session_row is None:
+            raise sqlite3.IntegrityError("session_id 不存在，无法写入回合")
+        current_turn_id = int(session_row["current_turn_id"])
+        # Web 会话拥有独立回合序号；主循环返回的 turn_id 可能来自全局运行状态，
+        # 不能直接写入会话历史，否则新会话会出现“第58回合”这类跳号摘要。
+        persisted_turn_id = current_turn_id + 1
+        connection.execute(
+            """
+            INSERT INTO web_session_turns(
+                session_id, turn_id, request_id, user_input, is_valid,
+                action_intent_json, physics_diff_json,
+                final_response, memory_summary, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                persisted_turn_id,
+                request_id,
+                user_input,
+                int(bool(turn_result.get("is_valid", False))),
+                action_intent_json,
+                physics_diff_json,
+                str(turn_result.get("final_response", "")),
+                memory_summary,
+                now_iso,
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE web_sessions
+            SET current_turn_id = ?, sandbox_mode = ?, memory_summary = ?,
+                last_active_at = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                persisted_turn_id,
+                int(bool(turn_result.get("is_sandbox_mode", False))),
+                memory_summary,
+                now_iso,
+                now_iso,
+                session_id,
+            ),
+        )
+        return persisted_turn_id
+
+    def persist_turn_result_with_idempotency(
+        self,
+        scope: str,
+        session_id: str,
+        request_id: str,
+        user_input: str,
+        turn_result: dict[str, Any],
+        memory_summary: str,
+        now_iso: str,
+        response_builder: Callable[[int], dict[str, Any]],
+    ) -> tuple[dict[str, Any], bool]:
+        """
+        功能：在单事务内完成幂等命中查询、回合落盘与幂等响应写入。
+        入参：scope（str）：幂等作用域；session_id（str）：会话标识；request_id（str）：请求标识；
+            user_input（str）：玩家输入；turn_result（dict[str, Any]）：主循环回合结果；
+            memory_summary（str）：摘要；now_iso（str）：更新时间；
+            response_builder（Callable[[int], dict[str, Any]]）：接收 session_turn_id
+            并构造最终响应。
+        出参：tuple[dict[str, Any], bool]，第一个值为响应 payload；
+            第二个值表示是否新写入（True=新写入，False=命中幂等）。
+        异常：response_builder 抛错、JSON 序列化失败或 SQL 异常时向上抛出；
+            事务自动回滚，避免“已落盘未缓存”。
+        """
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT response_json
+                FROM web_idempotency_keys
+                WHERE scope = ? AND session_id = ? AND request_id = ?
+                """,
+                (scope, session_id, request_id),
+            ).fetchone()
+            if existing is not None:
+                loaded = json.loads(str(existing["response_json"]))
+                if isinstance(loaded, dict):
+                    connection.commit()
+                    return cast(dict[str, Any], loaded), False
+
+            persisted_turn_id = self._persist_turn_result_in_transaction(
+                connection=connection,
+                session_id=session_id,
+                request_id=request_id,
+                user_input=user_input,
+                turn_result=turn_result,
+                memory_summary=memory_summary,
+                now_iso=now_iso,
+            )
+            response_payload = response_builder(persisted_turn_id)
+            response_json = json.dumps(response_payload, ensure_ascii=False)
+            connection.execute(
+                """
+                INSERT INTO web_idempotency_keys(scope, session_id, request_id, response_json)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(scope, session_id, request_id)
+                DO UPDATE SET response_json = excluded.response_json
+                """,
+                (scope, session_id, request_id, response_json),
+            )
+            connection.commit()
+            return response_payload, True
 
     def create_session(
         self,
@@ -249,7 +396,7 @@ class WebSessionStore:
         total = int(total_row["total"]) if total_row else 0
         items = [
             {
-                "turn_id": int(row["turn_id"]),
+                "session_turn_id": int(row["turn_id"]),
                 "is_valid": bool(int(row["is_valid"])),
                 "user_input": str(row["user_input"]),
                 "final_response": str(row["final_response"]),
@@ -259,10 +406,10 @@ class WebSessionStore:
         ]
         return total, items
 
-    def get_turn(self, session_id: str, turn_id: int) -> dict[str, Any] | None:
+    def get_turn(self, session_id: str, session_turn_id: int) -> dict[str, Any] | None:
         """
         功能：读取指定回合详情。
-        入参：session_id（str）：会话标识。turn_id（int）：回合号。
+        入参：session_id（str）：会话标识。session_turn_id（int）：会话内回合号。
         出参：dict[str, Any] | None，存在返回详情，不存在返回 None。
         异常：JSON 解析失败或 SQL 异常向上抛出。
         """
@@ -274,7 +421,7 @@ class WebSessionStore:
                 FROM web_session_turns
                 WHERE session_id = ? AND turn_id = ?
                 """,
-                (session_id, turn_id),
+                (session_id, session_turn_id),
             ).fetchone()
         if row is None:
             return None
@@ -289,7 +436,7 @@ class WebSessionStore:
             else None
         )
         return {
-            "turn_id": int(row["turn_id"]),
+            "session_turn_id": int(row["turn_id"]),
             "created_at": str(row["created_at"]),
             "user_input": str(row["user_input"]),
             "is_valid": bool(int(row["is_valid"])),
@@ -324,6 +471,7 @@ class WebSessionStore:
         return [
             {
                 "turn_id": int(row["turn_id"]),
+                "session_turn_id": int(row["turn_id"]),
                 "user_input": str(row["user_input"]),
                 "final_response": str(row["final_response"]),
             }
@@ -355,6 +503,7 @@ class WebSessionStore:
         return [
             {
                 "turn_id": int(row["turn_id"]),
+                "session_turn_id": int(row["turn_id"]),
                 "user_input": str(row["user_input"]),
                 "final_response": str(row["final_response"]),
             }
@@ -378,69 +527,16 @@ class WebSessionStore:
         出参：int，实际持久化的会话内回合号，始终从当前会话游标顺延。
         异常：SQL 异常向上抛出；调用方需负责事务前后流程控制。
         """
-        action_intent_json = (
-            json.dumps(turn_result.get("action_intent"), ensure_ascii=False)
-            if turn_result.get("action_intent") is not None
-            else None
-        )
-        physics_diff_json = (
-            json.dumps(turn_result.get("physics_diff"), ensure_ascii=False)
-            if turn_result.get("physics_diff") is not None
-            else None
-        )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            session_row = connection.execute(
-                """
-                SELECT current_turn_id
-                FROM web_sessions
-                WHERE session_id = ?
-                """,
-                (session_id,),
-            ).fetchone()
-            if session_row is None:
-                raise sqlite3.IntegrityError("session_id 不存在，无法写入回合")
-            current_turn_id = int(session_row["current_turn_id"])
-            # Web 会话拥有独立回合序号；主循环返回的 turn_id 可能来自全局运行状态，
-            # 不能直接写入会话历史，否则新会话会出现“第58回合”这类跳号摘要。
-            persisted_turn_id = current_turn_id + 1
-            connection.execute(
-                """
-                INSERT INTO web_session_turns(
-                    session_id, turn_id, request_id, user_input, is_valid,
-                    action_intent_json, physics_diff_json,
-                    final_response, memory_summary, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    persisted_turn_id,
-                    request_id,
-                    user_input,
-                    int(bool(turn_result.get("is_valid", False))),
-                    action_intent_json,
-                    physics_diff_json,
-                    str(turn_result.get("final_response", "")),
-                    memory_summary,
-                    now_iso,
-                ),
-            )
-            connection.execute(
-                """
-                UPDATE web_sessions
-                SET current_turn_id = ?, sandbox_mode = ?, memory_summary = ?,
-                    last_active_at = ?, updated_at = ?
-                WHERE session_id = ?
-                """,
-                (
-                    persisted_turn_id,
-                    int(bool(turn_result.get("is_sandbox_mode", False))),
-                    memory_summary,
-                    now_iso,
-                    now_iso,
-                    session_id,
-                ),
+            persisted_turn_id = self._persist_turn_result_in_transaction(
+                connection=connection,
+                session_id=session_id,
+                request_id=request_id,
+                user_input=user_input,
+                turn_result=turn_result,
+                memory_summary=memory_summary,
+                now_iso=now_iso,
             )
             connection.commit()
             return persisted_turn_id

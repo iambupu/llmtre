@@ -7,11 +7,14 @@ from collections.abc import Callable, Iterator
 from typing import Any, cast
 
 from flask import Blueprint, Response, current_app, request, stream_with_context
+from pydantic import ValidationError
 
+from state.contracts.turn import TurnResult
 from web_api.service import (
     DEFAULT_MEMORY_TURNS,
     MAX_MEMORY_TURNS,
     MIN_MEMORY_TURNS,
+    TurnExecutionError,
     build_memory,
     ensure_character_available,
     error,
@@ -19,6 +22,7 @@ from web_api.service import (
     get_session,
     log_post_body,
     logger,
+    new_trace_id,
     now_iso,
     parse_json_body,
     run_turn,
@@ -29,6 +33,185 @@ from web_api.service import (
 )
 
 turns_blueprint = Blueprint("turns", __name__, url_prefix="/api/sessions/<session_id>/turns")
+
+
+def _validate_turn_result_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：对外回合响应在出站前执行 A1 契约校验，防止字段漂移。
+    入参：response_payload（dict[str, Any]）：准备返回给客户端的回合结果。
+    出参：dict[str, Any]，通过契约模型规整后的响应体。
+    异常：字段缺失或类型不匹配时抛出 ValidationError，由上层统一转为错误响应。
+    """
+    # 事务边界：持久化后、返回前执行模型校验；失败即视为服务端契约错误。
+    validated = TurnResult.model_validate(response_payload)
+    return validated.model_dump(mode="json")
+
+
+def _append_trace_stage(
+    payload: dict[str, Any],
+    stage: str,
+    status: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """
+    功能：向回合 trace 追加阶段记录；trace 缺失时静默降级。
+    入参：payload（dict[str, Any]）：回合负载；stage/status（str）：阶段信息；
+        detail（dict[str, Any] | None，默认 None）：诊断细节。
+    出参：None。
+    异常：不抛异常；trace 结构非法时直接返回。
+    """
+    trace = payload.get("trace")
+    if not isinstance(trace, dict):
+        return
+    stages = trace.get("stages")
+    if not isinstance(stages, list):
+        return
+    stages.append(
+        {
+            "stage": stage,
+            "status": status,
+            "at": now_iso(),
+            "detail": detail or {},
+        }
+    )
+
+
+def _build_post_run_error_payload(
+    payload: dict[str, Any] | None,
+    stage: str,
+    err: Exception,
+) -> tuple[str, dict[str, Any]]:
+    """
+    功能：为 post-run 异常构造可回传的 trace_id/trace，避免普通与 SSE 错误链路断裂。
+    入参：payload（dict[str, Any] | None）：run_turn 成功后的负载，可能为空；
+        stage（str）：失败阶段（如 api.persisted/api.response_built）；
+        err（Exception）：原始异常对象。
+    出参：tuple[str, dict[str, Any]]，分别为可回传 trace_id 与最小 trace 结构。
+    异常：不抛异常；trace 不可用时降级为最小结构。
+    """
+    fallback_trace_id = new_trace_id()
+    if not isinstance(payload, dict):
+        return (
+            fallback_trace_id,
+            {
+                "trace_id": fallback_trace_id,
+                "stages": [
+                    {
+                        "stage": stage,
+                        "status": "failed",
+                        "at": now_iso(),
+                        "detail": {"error": str(err)},
+                    }
+                ],
+                "errors": [{"stage": stage, "error": str(err)}],
+            },
+        )
+    trace_id = str(payload.get("trace_id") or fallback_trace_id)
+    trace = payload.get("trace")
+    if not isinstance(trace, dict):
+        trace = {"trace_id": trace_id, "stages": [], "errors": []}
+    trace["trace_id"] = trace_id
+    stages = trace.get("stages")
+    if not isinstance(stages, list):
+        trace["stages"] = []
+        stages = trace["stages"]
+    stages.append(
+        {
+            "stage": stage,
+            "status": "failed",
+            "at": now_iso(),
+            "detail": {"error": str(err)},
+        }
+    )
+    errors = trace.get("errors")
+    if not isinstance(errors, list):
+        trace["errors"] = []
+        errors = trace["errors"]
+    errors.append({"stage": stage, "error": str(err)})
+    return trace_id, trace
+
+
+def _build_worker_fallback_error_payload(
+    trace_id: str,
+    stage: str,
+    err: Exception,
+) -> dict[str, Any]:
+    """
+    功能：为 SSE worker 全链路兜底异常构造最小错误负载，确保客户端总能收到 error 事件。
+    入参：trace_id（str）：本次请求预生成追踪号；stage（str）：失败阶段标识；
+        err（Exception）：捕获到的异常对象。
+    出参：dict[str, Any]，包含 code/message/trace_id/trace 的 SSE error 负载。
+    异常：函数内部不抛出异常；任何构造失败都由调用方外层兜底。
+    """
+    trace = {
+        "trace_id": trace_id,
+        "stages": [
+            {
+                "stage": stage,
+                "status": "failed",
+                "at": now_iso(),
+                "detail": {"error": str(err)},
+            }
+        ],
+        "errors": [{"stage": stage, "error": str(err)}],
+    }
+    return {
+        "code": "INTERNAL_ERROR",
+        "message": f"回合执行失败: {err}",
+        "trace_id": trace_id,
+        "trace": trace,
+    }
+
+
+def _build_turn_response_payload(
+    payload: dict[str, Any],
+    session_id: str,
+    request_id: str,
+    memory_summary: str,
+    session_turn_id: int,
+) -> dict[str, Any]:
+    """
+    功能：按统一契约组装回合响应，并在出站前完成校验。
+    入参：payload（dict[str, Any]）：run_turn 结果；session_id（str）：会话标识；
+        request_id（str）：请求标识；memory_summary（str）：会话记忆摘要；
+        session_turn_id（int）：持久化后的会话回合号。
+    出参：dict[str, Any]，已通过 TurnResult 契约校验的响应体。
+    异常：字段缺失或类型非法时抛 ValidationError，交由上层统一转错误响应。
+    """
+    response_payload = {
+        "session_id": session_id,
+        "session_turn_id": session_turn_id,
+        "runtime_turn_id": payload["runtime_turn_id"],
+        "trace_id": payload["trace_id"],
+        "request_id": request_id,
+        "is_valid": payload["is_valid"],
+        "action_intent": payload["action_intent"],
+        "physics_diff": payload["physics_diff"],
+        "final_response": payload["final_response"],
+        "quick_actions": payload["quick_actions"],
+        "affordances": payload["affordances"],
+        "memory_summary": memory_summary,
+        "active_character": payload["active_character"],
+        "trace": payload.get("trace"),
+        "scene_snapshot": payload["scene_snapshot"],
+        "outcome": payload["outcome"],
+        "clarification_question": payload["clarification_question"],
+        "failure_reason": payload["failure_reason"],
+        "suggested_next_step": payload["suggested_next_step"],
+        "should_advance_turn": payload["should_advance_turn"],
+        "should_write_story_memory": payload["should_write_story_memory"],
+        "debug_trace": payload["debug_trace"],
+        "errors": payload["errors"],
+    }
+    _append_trace_stage(
+        response_payload,
+        stage="api.persisted",
+        status="ok",
+        detail={"session_turn_id": session_turn_id},
+    )
+    if isinstance(response_payload.get("trace"), dict):
+        response_payload["trace"]["session_turn_id"] = session_turn_id
+    return _validate_turn_result_payload(response_payload)
 
 
 def _sse(event: str, payload: dict[str, Any]) -> str:
@@ -106,77 +289,87 @@ def create_turn(session_id: str) -> tuple[Any, int]:
             )
             session["memory_policy"] = memory_policy
         try:
-            payload = run_turn(session, user_input.strip(), character_id, sandbox_mode)
-        except TimeoutError:
-            logger.exception(
-                "回合执行超时: route=create_turn session_id=%s request_body=%s",
-                session_id,
-                body,
+            trace_id = new_trace_id()
+            payload = run_turn(
+                session,
+                user_input.strip(),
+                character_id,
+                sandbox_mode,
+                trace_id=trace_id,
+                request_id=request_id,
             )
-            return error(
-                "TURN_TIMEOUT",
-                "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。",
-                504,
-            )
-        except Exception as err:  # noqa: BLE001
+        except TurnExecutionError as err:
             logger.exception(
                 "回合执行失败: route=create_turn session_id=%s request_body=%s",
                 session_id,
                 body,
             )
-            return error("INTERNAL_ERROR", f"回合执行失败: {err}", 500)
-        memory_summary = str(session.get("memory_summary", ""))
-        if payload["should_write_story_memory"]:
-            recent_turns = context.session_store.get_recent_story_turns_for_memory(
+            message = (
+                "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。"
+                if err.error_code == "TURN_TIMEOUT"
+                else f"回合执行失败: {err}"
+            )
+            return error(
+                err.error_code,
+                message,
+                err.status_code,
+                trace_id=err.trace_id,
+                trace=err.trace,
+            )
+        try:
+            memory_summary = str(session.get("memory_summary", ""))
+            if payload["should_write_story_memory"]:
+                recent_turns = context.session_store.get_recent_story_turns_for_memory(
+                    session_id=session_id,
+                    max_turns=int(session["memory_policy"]["max_turns"]),
+                )
+                # 记忆摘要展示会话内回合号；主循环 turn_id 可能是全局计数，不能污染新会话。
+                draft_turn_id = int(session["current_turn_id"]) + 1
+                draft_turns = recent_turns + [
+                    {
+                        "turn_id": draft_turn_id,
+                        "session_turn_id": draft_turn_id,
+                        "user_input": user_input.strip(),
+                        "final_response": payload["final_response"],
+                    }
+                ]
+                memory_summary, _ = build_memory(
+                    turns=draft_turns,
+                    max_turns=int(session["memory_policy"]["max_turns"]),
+                )
+            response_payload, _ = context.session_store.persist_turn_result_with_idempotency(
+                scope="create_turn",
                 session_id=session_id,
-                max_turns=int(session["memory_policy"]["max_turns"]),
+                request_id=request_id,
+                user_input=user_input.strip(),
+                turn_result=payload,
+                memory_summary=memory_summary,
+                now_iso=now_iso(),
+                response_builder=lambda persisted_turn_id: _build_turn_response_payload(
+                    payload=payload,
+                    session_id=session_id,
+                    request_id=request_id,
+                    memory_summary=memory_summary,
+                    session_turn_id=persisted_turn_id,
+                ),
             )
-            # 记忆摘要展示会话内回合号；主循环 turn_id 可能是全局计数，不能污染新会话。
-            draft_turn_id = int(session["current_turn_id"]) + 1
-            draft_turns = recent_turns + [
-                {
-                    "turn_id": draft_turn_id,
-                    "user_input": user_input.strip(),
-                    "final_response": payload["final_response"],
-                }
-            ]
-            memory_summary, _ = build_memory(
-                turns=draft_turns,
-                max_turns=int(session["memory_policy"]["max_turns"]),
+            return success(response_payload)
+        except Exception as err:  # noqa: BLE001
+            stage = "api.response_built" if isinstance(err, ValidationError) else "api.persisted"
+            trace_id, trace = _build_post_run_error_payload(payload, stage=stage, err=err)
+            logger.exception(
+                "回合 post-run 失败: route=create_turn stage=%s session_id=%s request_id=%s",
+                stage,
+                session_id,
+                request_id,
             )
-        persisted_turn_id = context.session_store.persist_turn_result(
-            session_id=session_id,
-            request_id=request_id,
-            user_input=user_input.strip(),
-            turn_result=payload,
-            memory_summary=memory_summary,
-            now_iso=now_iso(),
-        )
-        response_payload = {
-            "session_id": session_id,
-            "turn_id": persisted_turn_id,
-            "is_valid": payload["is_valid"],
-            "action_intent": payload["action_intent"],
-            "physics_diff": payload["physics_diff"],
-            "final_response": payload["final_response"],
-            "quick_actions": payload["quick_actions"],
-            "memory_summary": memory_summary,
-            "active_character": payload["active_character"],
-            "scene_snapshot": payload["scene_snapshot"],
-            "outcome": payload["outcome"],
-            "clarification_question": payload["clarification_question"],
-            "should_advance_turn": payload["should_advance_turn"],
-            "should_write_story_memory": payload["should_write_story_memory"],
-            "debug_trace": payload["debug_trace"],
-            "errors": payload["errors"],
-        }
-        context.session_store.save_idempotent_response(
-            scope="create_turn",
-            session_id=session_id,
-            request_id=request_id,
-            response_payload=response_payload,
-        )
-        return success(response_payload)
+            return error(
+                "INTERNAL_ERROR",
+                f"回合执行失败: {err}",
+                500,
+                trace_id=trace_id,
+                trace=trace,
+            )
 
 
 @turns_blueprint.post("/stream")
@@ -235,6 +428,8 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
             if delta:
                 event_queue.put(("gm_delta", {"delta": delta}))
 
+        worker_trace_id = new_trace_id()
+
         def run_turn_worker() -> None:
             """
             功能：在后台线程执行完整回合，使 Flask 生成器可以实时转发 GM delta。
@@ -243,31 +438,54 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
             异常：内部捕获超时和普通异常，转换为 SSE error 负载；线程内显式建立
                 Flask app context，避免访问 current_app 时脱离上下文。
             """
-            with app.app_context():
-                _run_turn_worker_in_app_context(event_queue, emit_narrative_delta)
+            try:
+                with app.app_context():
+                    _run_turn_worker_in_app_context(
+                        event_queue,
+                        emit_narrative_delta,
+                        worker_trace_id,
+                    )
+            except Exception as err:  # noqa: BLE001
+                logger.exception(
+                    "SSE worker 未捕获异常: route=create_turn_stream session_id=%s request_id=%s",
+                    session_id,
+                    request_id,
+                )
+                event_queue.put(
+                    (
+                        "error",
+                        _build_worker_fallback_error_payload(
+                            trace_id=worker_trace_id,
+                            stage="api.worker",
+                            err=err,
+                        ),
+                    )
+                )
 
         def _run_turn_worker_in_app_context(
             target_queue: queue.Queue[tuple[str, dict[str, Any]]],
             narrative_callback: Callable[[str], None],
+            fallback_trace_id: str,
         ) -> None:
             """
             功能：在线程已有 Flask app context 的前提下执行回合与持久化。
             入参：target_queue（queue.Queue）：SSE 事件队列；
-                narrative_callback（Any）：GM 叙事片段回调。
+                narrative_callback（Any）：GM 叙事片段回调；
+                fallback_trace_id（str）：run_turn 前异常时用于兜底错误回传的追踪号。
             出参：None，通过 target_queue 发送 done/error/gm_delta。
             异常：内部捕获 TimeoutError/Exception 并转换为 error 事件。
             """
-            session_lock = context.get_session_lock(session_id)
-            with session_lock:
-                existing = context.session_store.get_idempotent_response(
-                    scope="create_turn",
-                    session_id=session_id,
-                    request_id=request_id,
-                )
-                if existing is not None:
-                    event_queue.put(("done", existing))
-                    return
-                try:
+            try:
+                session_lock = context.get_session_lock(session_id)
+                with session_lock:
+                    existing = context.session_store.get_idempotent_response(
+                        scope="create_turn",
+                        session_id=session_id,
+                        request_id=request_id,
+                    )
+                    if existing is not None:
+                        event_queue.put(("done", existing))
+                        return
                     event_queue.put(("loading_scene", {"message": "读取场景快照"}))
                     event_queue.put(("parsing_nlu", {"message": "理解玩家意图"}))
                     event_queue.put(("validating_action", {"message": "校验动作合法性"}))
@@ -279,6 +497,8 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
                         character_id,
                         sandbox_mode,
                         narrative_stream_callback=narrative_callback,
+                        trace_id=fallback_trace_id,
+                        request_id=request_id,
                     )
                     raw_scene_snapshot = payload.get("scene_snapshot")
                     scene_snapshot: dict[str, Any] = (
@@ -345,99 +565,138 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
                             },
                         },
                     ))
-                except TimeoutError:
-                    logger.exception(
-                        "回合执行超时: route=create_turn_stream session_id=%s request_body=%s",
-                        session_id,
-                        body,
-                    )
-                    target_queue.put((
-                        "error",
-                        {
-                            "code": "TURN_TIMEOUT",
-                            "message": (
-                                "回合执行超时：本地模型超过 3 分钟仍未完成，"
-                                "请稍后重试或改用更短的行动描述。"
+                    try:
+                        memory_summary = str(session.get("memory_summary", ""))
+                        if payload["should_write_story_memory"]:
+                            recent_turns = context.session_store.get_recent_story_turns_for_memory(
+                                session_id=session_id,
+                                max_turns=int(session["memory_policy"]["max_turns"]),
+                            )
+                            # 记忆摘要展示会话内回合号；
+                            # 主循环 turn_id 可能是全局计数，不能污染新会话。
+                            draft_turn_id = int(session["current_turn_id"]) + 1
+                            draft_turns = recent_turns + [
+                                {
+                                    "turn_id": draft_turn_id,
+                                    "session_turn_id": draft_turn_id,
+                                    "user_input": user_input.strip(),
+                                    "final_response": payload["final_response"],
+                                }
+                            ]
+                            memory_summary, _ = build_memory(
+                                turns=draft_turns,
+                                max_turns=int(session["memory_policy"]["max_turns"]),
+                            )
+                        response_payload, _ = (
+                            context.session_store.persist_turn_result_with_idempotency(
+                            scope="create_turn",
+                            session_id=session_id,
+                            request_id=request_id,
+                            user_input=user_input.strip(),
+                            turn_result=payload,
+                            memory_summary=memory_summary,
+                            now_iso=now_iso(),
+                            response_builder=lambda persisted_turn_id: _build_turn_response_payload(
+                                payload=payload,
+                                session_id=session_id,
+                                request_id=request_id,
+                                memory_summary=memory_summary,
+                                session_turn_id=persisted_turn_id,
                             ),
-                        },
-                    ))
-                    return
-                except Exception as err:  # noqa: BLE001
-                    logger.exception(
-                        "回合执行失败: route=create_turn_stream session_id=%s request_body=%s",
-                        session_id,
-                        body,
-                    )
-                    target_queue.put((
+                        )
+                        )
+                        target_queue.put(("done", response_payload))
+                    except Exception as err:  # noqa: BLE001
+                        stage = (
+                            "api.response_built"
+                            if isinstance(err, ValidationError)
+                            else "api.persisted"
+                        )
+                        trace_id, trace = _build_post_run_error_payload(
+                            payload,
+                            stage=stage,
+                            err=err,
+                        )
+                        logger.exception(
+                            (
+                                "回合 post-run 失败: route=create_turn_stream "
+                                "stage=%s session_id=%s request_id=%s"
+                            ),
+                            stage,
+                            session_id,
+                            request_id,
+                        )
+                        target_queue.put((
+                            "error",
+                            {
+                                "code": "INTERNAL_ERROR",
+                                "message": f"回合执行失败: {err}",
+                                "trace_id": trace_id,
+                                "trace": trace,
+                            },
+                        ))
+            except TurnExecutionError as err:
+                logger.exception(
+                    "回合执行失败: route=create_turn_stream session_id=%s request_body=%s",
+                    session_id,
+                    body,
+                )
+                message = (
+                    "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。"
+                    if err.error_code == "TURN_TIMEOUT"
+                    else f"回合执行失败: {err}"
+                )
+                target_queue.put((
+                    "error",
+                    {
+                        "code": err.error_code,
+                        "message": message,
+                        "trace_id": err.trace_id,
+                        "trace": err.trace,
+                    },
+                ))
+                return
+            except Exception as err:  # noqa: BLE001
+                logger.exception(
+                    "SSE worker 处理失败: route=create_turn_stream session_id=%s request_id=%s",
+                    session_id,
+                    request_id,
+                )
+                target_queue.put(
+                    (
                         "error",
-                        {"code": "INTERNAL_ERROR", "message": f"回合执行失败: {err}"},
-                    ))
-                    return
-
-                memory_summary = str(session.get("memory_summary", ""))
-                if payload["should_write_story_memory"]:
-                    recent_turns = context.session_store.get_recent_story_turns_for_memory(
-                        session_id=session_id,
-                        max_turns=int(session["memory_policy"]["max_turns"]),
+                        _build_worker_fallback_error_payload(
+                            trace_id=fallback_trace_id,
+                            stage="api.received",
+                            err=err,
+                        ),
                     )
-                    # 记忆摘要展示会话内回合号；主循环 turn_id 可能是全局计数，不能污染新会话。
-                    draft_turn_id = int(session["current_turn_id"]) + 1
-                    draft_turns = recent_turns + [
-                        {
-                            "turn_id": draft_turn_id,
-                            "user_input": user_input.strip(),
-                            "final_response": payload["final_response"],
-                        }
-                    ]
-                    memory_summary, _ = build_memory(
-                        turns=draft_turns,
-                        max_turns=int(session["memory_policy"]["max_turns"]),
-                    )
-                persisted_turn_id = context.session_store.persist_turn_result(
-                    session_id=session_id,
-                    request_id=request_id,
-                    user_input=user_input.strip(),
-                    turn_result=payload,
-                    memory_summary=memory_summary,
-                    now_iso=now_iso(),
                 )
-                response_payload = {
-                    "session_id": session_id,
-                    "turn_id": persisted_turn_id,
-                    "is_valid": payload["is_valid"],
-                    "action_intent": payload["action_intent"],
-                    "physics_diff": payload["physics_diff"],
-                    "final_response": payload["final_response"],
-                    "quick_actions": payload["quick_actions"],
-                    "memory_summary": memory_summary,
-                    "active_character": payload["active_character"],
-                    "scene_snapshot": payload["scene_snapshot"],
-                    "outcome": payload["outcome"],
-                    "clarification_question": payload["clarification_question"],
-                    "should_advance_turn": payload["should_advance_turn"],
-                    "should_write_story_memory": payload["should_write_story_memory"],
-                    "debug_trace": payload["debug_trace"],
-                    "errors": payload["errors"],
-                }
-                context.session_store.save_idempotent_response(
-                    scope="create_turn",
-                    session_id=session_id,
-                    request_id=request_id,
-                    response_payload=response_payload,
-                )
-                target_queue.put(("done", response_payload))
+                return
 
         worker = threading.Thread(target=run_turn_worker, daemon=True)
         worker.start()
+        terminal_event_received = False
         while True:
             try:
                 event_name, payload = event_queue.get(timeout=0.5)
             except queue.Empty:
                 if worker.is_alive():
                     continue
-                break
+                if terminal_event_received:
+                    break
+                yield _sse(
+                    "error",
+                    _build_worker_fallback_error_payload(
+                        trace_id=worker_trace_id,
+                        stage="api.worker",
+                        err=RuntimeError("worker exited without terminal event"),
+                    ),
+                )
+                return
             yield _sse(event_name, payload)
             if event_name in {"done", "error"}:
+                terminal_event_received = True
                 return
 
     return Response(stream_with_context(_generate()), mimetype="text/event-stream")
@@ -481,11 +740,11 @@ def list_turns(session_id: str) -> tuple[Any, int]:
     )
 
 
-@turns_blueprint.get("/<int:turn_id>")
-def get_turn(session_id: str, turn_id: int) -> tuple[Any, int]:
+@turns_blueprint.get("/<int:session_turn_id>")
+def get_turn(session_id: str, session_turn_id: int) -> tuple[Any, int]:
     """
     功能：查询单个回合详情。
-    入参：session_id（path），turn_id（path）。
+    入参：session_id（path），session_turn_id（path）。
     出参：tuple[Any, int]，存在返回 200，不存在返回 404。
     异常：参数非法返回 INVALID_ARGUMENT。
     """
@@ -495,13 +754,16 @@ def get_turn(session_id: str, turn_id: int) -> tuple[Any, int]:
     if session is None:
         return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
     context = get_runtime_context()
-    target = context.session_store.get_turn(session_id=session_id, turn_id=turn_id)
+    target = context.session_store.get_turn(
+        session_id=session_id,
+        session_turn_id=session_turn_id,
+    )
     if target is None:
-        return error("TURN_NOT_FOUND", "turn_id 不存在", 404)
+        return error("TURN_NOT_FOUND", "session_turn_id 不存在", 404)
     return success(
         {
             "session_id": session_id,
-            "turn_id": target["turn_id"],
+            "session_turn_id": target["session_turn_id"],
             "created_at": target["created_at"],
             "user_input": target["user_input"],
             "is_valid": target["is_valid"],

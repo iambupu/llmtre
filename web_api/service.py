@@ -15,8 +15,10 @@ from typing import Any, cast
 from flask import Flask, current_app, jsonify, request
 
 from core.event_bus import EventBus
+from game_workflows.affordances import build_scene_interaction_model
 from game_workflows.async_watchers import NoOpOuterLoopBridge
 from game_workflows.main_event_loop import MainEventLoop
+from state.contracts.turn import TurnRequestContext, TurnTrace, TurnTraceStage
 from state.tools.db_initializer import DB_PATH, DBInitializer
 from state.tools.runtime_schema import ensure_runtime_tables
 from web_api.session_store import WebSessionStore
@@ -40,6 +42,37 @@ DEFAULT_MEMORY_TURNS = 20
 MIN_MEMORY_TURNS = 5
 MAX_MEMORY_TURNS = 100
 logger = logging.getLogger("WebAPI.Runtime")
+
+
+class TurnExecutionError(RuntimeError):
+    """
+    功能：封装回合执行失败时的 trace 上下文，供路由层返回同一 trace_id。
+    入参：message（str）：错误说明；trace_id（str）：请求级追踪号；
+        trace（dict[str, Any]）：阶段记录。
+    出参：TurnExecutionError。
+    异常：构造本身不做额外校验；字段类型错误由调用方保证。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        trace_id: str,
+        trace: dict[str, Any],
+        error_code: str = "INTERNAL_ERROR",
+        status_code: int = 500,
+    ) -> None:
+        """
+        功能：保存失败 trace 关联信息，避免路由层重新生成 trace_id。
+        入参：message（str）：错误说明；trace_id（str）：请求追踪号；
+            trace（dict[str, Any]）：追踪负载。
+        出参：None。
+        异常：无显式异常；内存分配失败时系统异常向上抛出。
+        """
+        super().__init__(message)
+        self.trace_id = trace_id
+        self.trace = trace
+        self.error_code = error_code
+        self.status_code = status_code
 
 
 class ApiRuntimeContext:
@@ -200,18 +233,28 @@ def success(payload: dict[str, Any], status_code: int = 200) -> tuple[Any, int]:
     return jsonify(body), status_code
 
 
-def error(code: str, message: str, status_code: int) -> tuple[Any, int]:
+def error(
+    code: str,
+    message: str,
+    status_code: int,
+    trace_id: str | None = None,
+    trace: dict[str, Any] | None = None,
+) -> tuple[Any, int]:
     """
     功能：返回统一错误响应体。
-    入参：code（str）：错误码。message（str）：错误描述。status_code（int）：HTTP 状态码。
+    入参：code（str）：错误码。message（str）：错误描述。status_code（int）：HTTP 状态码；
+        trace_id（str | None，默认 None）：指定追踪号；trace（dict[str, Any] | None，默认 None）：
+        可选阶段追踪负载。
     出参：tuple[Any, int]，可直接作为 Flask 路由返回值。
     异常：响应序列化失败时由 Flask 抛出异常。
     """
     body = {
         "ok": False,
-        "trace_id": new_trace_id(),
+        "trace_id": trace_id or new_trace_id(),
         "error": {"code": code, "message": message},
     }
+    if isinstance(trace, dict):
+        body["trace"] = trace
     return jsonify(body), status_code
 
 
@@ -319,12 +362,12 @@ def build_memory(turns: list[dict[str, Any]], max_turns: int) -> tuple[str, list
     items: list[dict[str, Any]] = []
     lines: list[str] = []
     for turn in recent:
-        turn_id = int(turn.get("turn_id", 0))
+        turn_id = int(turn.get("session_turn_id", turn.get("turn_id", 0)))
         user_input = str(turn.get("user_input", ""))
         final_response = str(turn.get("final_response", ""))
         line = f"第{turn_id}回合：输入[{user_input}] -> 响应[{final_response}]"
         lines.append(line)
-        items.append({"turn_id": turn_id, "text": line})
+        items.append({"session_turn_id": turn_id, "text": line})
     return "\n".join(lines), items
 
 
@@ -403,6 +446,14 @@ def build_initial_turn_payload(
         gm_state,
         final_response,
     )
+    scene_snapshot = play_state.get("scene_snapshot")
+    play_state["affordances"] = (
+        scene_snapshot.get("affordances", []) if isinstance(scene_snapshot, dict) else []
+    )
+    play_state["failure_reason"] = ""
+    play_state["suggested_next_step"] = (
+        play_state["quick_actions"][0] if play_state["quick_actions"] else "观察周围"
+    )
     play_state["outcome"] = "initial_scene"
     return play_state
 
@@ -467,12 +518,15 @@ def run_turn(
     character_id: str,
     sandbox_mode: bool,
     narrative_stream_callback: Callable[[str], None] | None = None,
+    trace_id: str | None = None,
+    request_id: str = "",
 ) -> dict[str, Any]:
     """
     功能：执行一次主循环回合并返回标准化结果（不直接持久化）。
     入参：session（dict[str, Any]）：目标会话。user_input（str）：玩家输入。
         character_id（str）：角色标识。sandbox_mode（bool）：是否沙盒。
-        narrative_stream_callback（Callable[[str], None] | None，默认 None）：GM 叙事片段回调。
+        narrative_stream_callback（Callable[[str], None] | None，默认 None）：GM 叙事片段回调；
+        trace_id（str | None，默认 None）：请求级追踪号；request_id（str，默认空）：幂等键。
     出参：dict[str, Any]，包含回合号、动作与叙事结果的负载。
     异常：主循环异常或超过 TURN_TIMEOUT_SECONDS（当前 180 秒）时向上抛出；
         调用方负责转换为玩家可见的 API 或 SSE 错误响应。
@@ -480,40 +534,205 @@ def run_turn(
     context = get_runtime_context()
     if context.main_loop is None:
         raise RuntimeError("主循环未初始化")
-    result = asyncio.run(
-        asyncio.wait_for(
-            context.main_loop.run(
-                user_input=user_input,
-                initial_character_id=character_id,
-                is_sandbox_mode=sandbox_mode,
-                recent_memory=str(session.get("memory_summary", "")),
-                narrative_stream_callback=narrative_stream_callback,
-            ),
-            timeout=TURN_TIMEOUT_SECONDS,
+    effective_trace_id = trace_id or new_trace_id()
+    trace = TurnTrace(
+        trace_id=effective_trace_id,
+        request_id=request_id,
+        session_id=str(session["session_id"]),
+    )
+    trace.stages.append(
+        TurnTraceStage(
+            stage="api.received",
+            status="ok",
+            at=now_iso(),
+            detail={
+                "character_id": character_id,
+                "sandbox_mode": sandbox_mode,
+            },
         )
+    )
+    request_context = TurnRequestContext(
+        trace_id=effective_trace_id,
+        request_id=request_id,
+        session_id=str(session["session_id"]),
+        character_id=character_id,
+        sandbox_mode=sandbox_mode,
+        recent_memory=str(session.get("memory_summary", "")),
+    )
+    try:
+        result = asyncio.run(
+            asyncio.wait_for(
+                context.main_loop.run(
+                    user_input=user_input,
+                    initial_character_id=character_id,
+                    is_sandbox_mode=sandbox_mode,
+                    recent_memory=str(session.get("memory_summary", "")),
+                    narrative_stream_callback=narrative_stream_callback,
+                    request_context=request_context,
+                ),
+                timeout=TURN_TIMEOUT_SECONDS,
+            )
+        )
+    except TimeoutError as error:
+        trace.stages.append(
+            TurnTraceStage(
+                stage="run_turn",
+                status="failed",
+                at=now_iso(),
+                detail={"error": "timeout"},
+            )
+        )
+        trace.errors.append({"stage": "run_turn", "error": "timeout"})
+        logger.error("TurnTrace[%s] run_turn_timeout: %s", effective_trace_id, str(error))
+        raise TurnExecutionError(
+            message="回合执行超时",
+            trace_id=effective_trace_id,
+            trace=trace.model_dump(mode="json"),
+            error_code="TURN_TIMEOUT",
+            status_code=504,
+        ) from error
+    except Exception as error:  # noqa: BLE001
+        trace.stages.append(
+            TurnTraceStage(
+                stage="run_turn",
+                status="failed",
+                at=now_iso(),
+                detail={"error": str(error)},
+            )
+        )
+        trace.errors.append({"stage": "run_turn", "error": str(error)})
+        logger.error("TurnTrace[%s] run_turn_failed: %s", effective_trace_id, str(error))
+        raise TurnExecutionError(
+            message=str(error),
+            trace_id=effective_trace_id,
+            trace=trace.model_dump(mode="json"),
+            error_code="INTERNAL_ERROR",
+            status_code=500,
+        ) from error
+    raw_character = (
+        result.get("active_character") if isinstance(result.get("active_character"), dict) else {}
+    )
+    active_character = _enrich_character_inventory(cast(dict[str, Any], raw_character))
+    raw_scene_snapshot = result.get("scene_snapshot")
+    scene_snapshot = dict(raw_scene_snapshot) if isinstance(raw_scene_snapshot, dict) else {}
+    trace.stages.append(
+        TurnTraceStage(
+            stage="scene.loaded",
+            status="ok" if bool(scene_snapshot) else "failed",
+            at=now_iso(),
+            detail={
+                "has_scene_snapshot": bool(scene_snapshot),
+                "schema_version": scene_snapshot.get("schema_version"),
+            },
+        )
+    )
+    trace.stages.append(
+        TurnTraceStage(
+            stage="nlu.parsed",
+            status="ok" if result.get("action_intent") is not None else "failed",
+            at=now_iso(),
+            detail={
+                "has_action_intent": result.get("action_intent") is not None,
+                "turn_outcome": str(result.get("turn_outcome", "")),
+            },
+        )
+    )
+    trace.stages.append(
+        TurnTraceStage(
+            stage="action.validated",
+            status="ok",
+            at=now_iso(),
+            detail={
+                "is_valid": bool(result.get("is_valid", False)),
+                "errors": result.get("validation_errors", []),
+            },
+        )
+    )
+    trace.stages.append(
+        TurnTraceStage(
+            stage="action.resolved",
+            status=(
+                "ok"
+                if bool(result.get("is_valid", False))
+                else "skipped"
+            ),
+            at=now_iso(),
+            detail={"physics_diff": result.get("physics_diff")},
+        )
+    )
+    trace.stages.append(
+        TurnTraceStage(
+            stage="state.updated",
+            status=(
+                "ok"
+                if bool(result.get("should_advance_turn", False))
+                else "skipped"
+            ),
+            at=now_iso(),
+            detail={
+                "should_advance_turn": bool(result.get("should_advance_turn", False)),
+                "runtime_turn_id": int(result.get("runtime_turn_id", result.get("turn_id", 0))),
+            },
+        )
+    )
+    scene_snapshot.update(build_scene_interaction_model(scene_snapshot, active_character))
+    affordances = scene_snapshot.get("affordances", [])
+    trace.stages.append(
+        TurnTraceStage(
+            stage="gm.rendered",
+            status="ok" if bool(str(result.get("final_response", ""))) else "failed",
+            at=now_iso(),
+            detail={"quick_actions_count": len(result.get("quick_actions", []))},
+        )
+    )
+    outer_emit_result = result.get("outer_emit_result")
+    outer_status = "skipped"
+    outer_detail: dict[str, Any] = {"mode": "unknown"}
+    if isinstance(context.main_loop.outer_bridge, NoOpOuterLoopBridge):
+        outer_status = "skipped"
+        outer_detail = {"mode": "noop"}
+    elif isinstance(outer_emit_result, dict):
+        candidate_status = str(outer_emit_result.get("status", "skipped"))
+        if candidate_status in {"ok", "failed", "skipped"}:
+            outer_status = candidate_status
+        detail = outer_emit_result.get("detail")
+        if isinstance(detail, dict):
+            outer_detail = detail
+    trace.stages.append(
+        TurnTraceStage(
+            stage="outer.emitted",
+            status=outer_status,
+            at=now_iso(),
+            detail=outer_detail,
+        )
+    )
+    trace.runtime_turn_id = int(result.get("runtime_turn_id", result.get("turn_id", 0)))
+    logger.info(
+        "TurnTrace[%s] stages=%s",
+        effective_trace_id,
+        [item.stage for item in trace.stages],
     )
     return {
         "session_id": session["session_id"],
-        "turn_id": int(result.get("turn_id", 0)),
+        "runtime_turn_id": int(result.get("runtime_turn_id", result.get("turn_id", 0))),
+        "trace_id": effective_trace_id,
+        "request_id": request_id,
         "is_valid": bool(result.get("is_valid", False)),
         "action_intent": result.get("action_intent"),
         "physics_diff": result.get("physics_diff"),
         "final_response": str(result.get("final_response", "")),
         "quick_actions": result.get("quick_actions", []),
+        "affordances": affordances if isinstance(affordances, list) else [],
         "is_sandbox_mode": bool(result.get("is_sandbox_mode", sandbox_mode)),
-        "active_character": _enrich_character_inventory(
-            cast(
-                dict[str, Any],
-                result.get("active_character")
-                if isinstance(result.get("active_character"), dict)
-                else {},
-            )
-        ),
-        "scene_snapshot": result.get("scene_snapshot"),
+        "active_character": active_character,
+        "scene_snapshot": scene_snapshot,
         "outcome": str(result.get("turn_outcome", "invalid")),
         "clarification_question": str(result.get("clarification_question", "")),
+        "failure_reason": str(result.get("failure_reason", "")),
+        "suggested_next_step": str(result.get("suggested_next_step", "")),
         "should_advance_turn": bool(result.get("should_advance_turn", False)),
         "should_write_story_memory": bool(result.get("should_write_story_memory", False)),
         "debug_trace": result.get("debug_trace", []),
         "errors": result.get("validation_errors", []),
+        "trace": trace.model_dump(mode="json"),
     }

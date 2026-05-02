@@ -93,6 +93,12 @@ paths:
           $ref: "#/components/responses/SessionNotFound"
         "409":
           $ref: "#/components/responses/TurnConflict"
+        "504":
+          description: 回合执行超时
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           $ref: "#/components/responses/InternalError"
     get:
@@ -115,14 +121,14 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /api/sessions/{session_id}/turns/{turn_id}:
+  /api/sessions/{session_id}/turns/{session_turn_id}:
     get:
       tags: [Turns]
       summary: 查询单回合详情
       operationId: getTurn
       parameters:
         - $ref: "#/components/parameters/SessionIdPath"
-        - $ref: "#/components/parameters/TurnIdPath"
+        - $ref: "#/components/parameters/SessionTurnIdPath"
       responses:
         "200":
           description: 查询成功
@@ -273,8 +279,8 @@ components:
       schema:
         type: string
         pattern: "^[a-zA-Z0-9_-]{8,64}$"
-    TurnIdPath:
-      name: turn_id
+    SessionTurnIdPath:
+      name: session_turn_id
       in: path
       required: true
       schema:
@@ -342,7 +348,7 @@ components:
             trace_id: trc_01HXYZABCDEF
             error:
               code: TURN_NOT_FOUND
-              message: turn_id 不存在
+              message: session_turn_id 不存在
     TurnConflict:
       description: 回合并发冲突或幂等冲突
       content:
@@ -383,7 +389,10 @@ components:
     IsoTime:
       type: string
       format: date-time
-    TurnId:
+    SessionTurnId:
+      type: integer
+      minimum: 0
+    RuntimeTurnId:
       type: integer
       minimum: 0
 
@@ -401,6 +410,7 @@ components:
             - TURN_CONFLICT
             - IDEMPOTENCY_CONFLICT
             - MODEL_UNAVAILABLE
+            - TURN_TIMEOUT
             - INTERNAL_ERROR
         message:
           type: string
@@ -417,6 +427,9 @@ components:
           pattern: "^trc_[a-zA-Z0-9]{8,64}$"
         error:
           $ref: "#/components/schemas/ErrorObject"
+        trace:
+          type: object
+          additionalProperties: true
 
     RequestWithIdempotency:
       type: object
@@ -460,7 +473,7 @@ components:
     CreateSessionResponse:
       type: object
       required:
-        [ok, trace_id, session_id, character_id, sandbox_mode, created_at, current_turn_id]
+        [ok, trace_id, session_id, character_id, sandbox_mode, created_at, current_session_turn_id]
       properties:
         ok:
           type: boolean
@@ -474,14 +487,14 @@ components:
           $ref: "#/components/schemas/CharacterId"
         sandbox_mode:
           type: boolean
-        current_turn_id:
-          $ref: "#/components/schemas/TurnId"
+        current_session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
         created_at:
           $ref: "#/components/schemas/IsoTime"
 
     GetSessionResponse:
       type: object
-      required: [ok, trace_id, session_id, character_id, sandbox_mode, current_turn_id, last_active_at]
+      required: [ok, trace_id, session_id, character_id, sandbox_mode, current_session_turn_id, last_active_at]
       properties:
         ok:
           type: boolean
@@ -494,8 +507,8 @@ components:
           $ref: "#/components/schemas/CharacterId"
         sandbox_mode:
           type: boolean
-        current_turn_id:
-          $ref: "#/components/schemas/TurnId"
+        current_session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
         last_active_at:
           $ref: "#/components/schemas/IsoTime"
 
@@ -521,8 +534,11 @@ components:
         - ok
         - trace_id
         - session_id
-        - turn_id
+        - session_turn_id
+        - runtime_turn_id
+        - request_id
         - is_valid
+        - outcome
         - final_response
       properties:
         ok:
@@ -532,10 +548,16 @@ components:
           type: string
         session_id:
           $ref: "#/components/schemas/SessionId"
-        turn_id:
-          $ref: "#/components/schemas/TurnId"
+        session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
+        runtime_turn_id:
+          $ref: "#/components/schemas/RuntimeTurnId"
+        request_id:
+          $ref: "#/components/schemas/RequestId"
         is_valid:
           type: boolean
+        outcome:
+          type: string
         action_intent:
           type: object
           additionalProperties: true
@@ -547,9 +569,42 @@ components:
         final_response:
           type: string
           minLength: 1
+        quick_actions:
+          type: array
+          items:
+            type: string
+        affordances:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        scene_snapshot:
+          type: object
+          additionalProperties: true
+        active_character:
+          type: object
+          additionalProperties: true
+        trace:
+          type: object
+          additionalProperties: true
+        clarification_question:
+          type: string
+        failure_reason:
+          type: string
+        suggested_next_step:
+          type: string
         memory_summary:
           type: string
           nullable: true
+        should_advance_turn:
+          type: boolean
+        should_write_story_memory:
+          type: boolean
+        debug_trace:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
         errors:
           type: array
           items:
@@ -557,10 +612,10 @@ components:
 
     TurnSummary:
       type: object
-      required: [turn_id, is_valid, user_input, final_response, created_at]
+      required: [session_turn_id, is_valid, user_input, final_response, created_at]
       properties:
-        turn_id:
-          $ref: "#/components/schemas/TurnId"
+        session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
         is_valid:
           type: boolean
         user_input:
@@ -594,7 +649,7 @@ components:
 
     GetTurnResponse:
       type: object
-      required: [ok, trace_id, session_id, turn_id, created_at]
+      required: [ok, trace_id, session_id, session_turn_id, created_at]
       properties:
         ok:
           type: boolean
@@ -603,8 +658,8 @@ components:
           type: string
         session_id:
           $ref: "#/components/schemas/SessionId"
-        turn_id:
-          $ref: "#/components/schemas/TurnId"
+        session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
         user_input:
           type: string
         is_valid:
@@ -627,10 +682,10 @@ components:
 
     MemoryEntry:
       type: object
-      required: [turn_id, text]
+      required: [session_turn_id, text]
       properties:
-        turn_id:
-          $ref: "#/components/schemas/TurnId"
+        session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
         text:
           type: string
     GetMemoryResponse:
@@ -682,16 +737,16 @@ components:
           type: string
         covered_turn_range:
           type: object
-          required: [from_turn_id, to_turn_id]
+          required: [from_session_turn_id, to_session_turn_id]
           properties:
-            from_turn_id:
-              $ref: "#/components/schemas/TurnId"
-            to_turn_id:
-              $ref: "#/components/schemas/TurnId"
+            from_session_turn_id:
+              $ref: "#/components/schemas/SessionTurnId"
+            to_session_turn_id:
+              $ref: "#/components/schemas/SessionTurnId"
 
     SandboxCommitResponse:
       type: object
-      required: [ok, trace_id, session_id, committed, turn_id]
+      required: [ok, trace_id, session_id, committed, session_turn_id, runtime_turn_id]
       properties:
         ok:
           type: boolean
@@ -703,11 +758,13 @@ components:
         committed:
           type: boolean
           enum: [true]
-        turn_id:
-          $ref: "#/components/schemas/TurnId"
+        session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
+        runtime_turn_id:
+          $ref: "#/components/schemas/RuntimeTurnId"
     SandboxDiscardResponse:
       type: object
-      required: [ok, trace_id, session_id, discarded, turn_id]
+      required: [ok, trace_id, session_id, discarded, session_turn_id, runtime_turn_id]
       properties:
         ok:
           type: boolean
@@ -719,8 +776,10 @@ components:
         discarded:
           type: boolean
           enum: [true]
-        turn_id:
-          $ref: "#/components/schemas/TurnId"
+        session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
+        runtime_turn_id:
+          $ref: "#/components/schemas/RuntimeTurnId"
 
     ResetSessionRequest:
       allOf:
@@ -732,7 +791,7 @@ components:
               default: true
     ResetSessionResponse:
       type: object
-      required: [ok, trace_id, session_id, reset, current_turn_id]
+      required: [ok, trace_id, session_id, reset, current_session_turn_id]
       properties:
         ok:
           type: boolean
@@ -744,5 +803,5 @@ components:
         reset:
           type: boolean
           enum: [true]
-        current_turn_id:
-          $ref: "#/components/schemas/TurnId"
+        current_session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
