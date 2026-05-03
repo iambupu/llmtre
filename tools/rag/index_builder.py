@@ -13,7 +13,7 @@ from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.core.extractors import BaseExtractor
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import JSONNodeParser, MarkdownNodeParser, SentenceSplitter
-from llama_index.core.schema import BaseNode
+from llama_index.core.schema import BaseNode, TextNode
 from llama_index.readers.file import DocxReader, PandasExcelReader, PDFReader, XMLReader
 from pydantic import Field
 
@@ -239,8 +239,35 @@ class IndexBuilder:
                 nodes = txt_parser.get_nodes_from_documents([doc])
             for node in nodes:
                 node.metadata.update(doc.metadata)
-            final_nodes.extend(nodes)
+            # 降级路径：Markdown/JSON 解析器可能产出超长节点，Ollama embedding 会因上下文超限失败。
+            final_nodes.extend(self._split_oversized_nodes(nodes, doc.metadata, txt_parser))
         return final_nodes
+
+    def _split_oversized_nodes(
+        self,
+        nodes: list[BaseNode],
+        metadata: dict[str, Any],
+        splitter: SentenceSplitter,
+    ) -> list[BaseNode]:
+        """
+        功能：将 parser 产出的超长节点二次切片，避免 embedding 模型上下文超限。
+        入参：nodes（list[BaseNode]）：原始节点列表；metadata（dict[str, Any]）：文档元数据；
+            splitter（SentenceSplitter）：文本切片器，chunk_size 由索引构建策略统一配置。
+        出参：list[BaseNode]，长度受控且继承原始元数据的节点列表。
+        异常：节点内容读取或切片失败时向上抛出，由索引构建入口记录失败原因。
+        """
+        split_nodes: list[BaseNode] = []
+        for node in nodes:
+            text = node.get_content()
+            if len(text) <= 2400:
+                split_nodes.append(node)
+                continue
+            # 非常量来源：2400 是对 512 chunk_size 的宽松字符级兜底；
+            # 这里防止 tokenizer 差异导致长输入。
+            for part in splitter.split_text(text):
+                split_node = TextNode(text=part, metadata=dict(metadata))
+                split_nodes.append(split_node)
+        return split_nodes
 
     def _run_llm_scoring(self, nodes: list[BaseNode]) -> list[BaseNode]:
         """

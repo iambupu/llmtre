@@ -10,7 +10,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from flask import Flask, current_app, jsonify, request
 
@@ -609,10 +609,11 @@ def run_turn(
             error_code="INTERNAL_ERROR",
             status_code=500,
         ) from error
-    raw_character = (
-        result.get("active_character") if isinstance(result.get("active_character"), dict) else {}
+    raw_character_obj = result.get("active_character")
+    raw_character: dict[str, Any] = (
+        dict(raw_character_obj) if isinstance(raw_character_obj, dict) else {}
     )
-    active_character = _enrich_character_inventory(cast(dict[str, Any], raw_character))
+    active_character = _enrich_character_inventory(raw_character)
     raw_scene_snapshot = result.get("scene_snapshot")
     scene_snapshot = dict(raw_scene_snapshot) if isinstance(raw_scene_snapshot, dict) else {}
     trace.stages.append(
@@ -686,7 +687,7 @@ def run_turn(
         )
     )
     outer_emit_result = result.get("outer_emit_result")
-    outer_status = "skipped"
+    outer_status: Literal["ok", "failed", "skipped"] = "skipped"
     outer_detail: dict[str, Any] = {"mode": "unknown"}
     if isinstance(context.main_loop.outer_bridge, NoOpOuterLoopBridge):
         outer_status = "skipped"
@@ -694,7 +695,7 @@ def run_turn(
     elif isinstance(outer_emit_result, dict):
         candidate_status = str(outer_emit_result.get("status", "skipped"))
         if candidate_status in {"ok", "failed", "skipped"}:
-            outer_status = candidate_status
+            outer_status = cast(Literal["ok", "failed", "skipped"], candidate_status)
         detail = outer_emit_result.get("detail")
         if isinstance(detail, dict):
             outer_detail = detail

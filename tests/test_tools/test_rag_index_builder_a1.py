@@ -273,6 +273,25 @@ def test_parse_nodes_chooses_parser_by_file_extension(monkeypatch) -> None:
     assert {node.metadata["source"] for node in nodes} == {"md", "json", "txt"}
 
 
+def test_parse_nodes_splits_oversized_parser_nodes(monkeypatch) -> None:
+    """
+    功能：验证 Markdown/JSON parser 产出的超长节点会被二次切片，避免 embedding 上下文超限。
+    入参：monkeypatch。
+    出参：None。
+    异常：断言失败表示长文档降级切片策略回归。
+    """
+    _patch_builders(monkeypatch)
+    builder = IndexBuilder(config={})
+    long_text = "规则段落。" * 900
+    docs = [Document(text=long_text, metadata={"file_name": "large.md", "source": "md"})]
+
+    nodes = builder._parse_nodes(docs)
+
+    assert len(nodes) > 1
+    assert all(len(node.get_content()) <= 2400 for node in nodes)
+    assert {node.metadata["source"] for node in nodes} == {"md"}
+
+
 def test_build_all_skips_graph_when_no_graph_docs_and_builds_vector(monkeypatch) -> None:
     """
     功能：验证 build_all 在无图谱文档时跳过 graph_builder，并把解析节点交给 vector_builder。

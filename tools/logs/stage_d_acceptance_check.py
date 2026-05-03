@@ -106,7 +106,7 @@ def _run_contract_and_e2e() -> dict[str, Any]:
     _assert_status(status, 200, body, "get_session")
     report["contract"]["get_session"] = {
         "status": status,
-        "current_turn_id": body["current_turn_id"],
+        "current_session_turn_id": body["current_session_turn_id"],
     }
 
     five_turn_ids: list[int] = []
@@ -122,7 +122,7 @@ def _run_contract_and_e2e() -> dict[str, Any]:
             },
         )
         _assert_status(status, 200, body, f"create_turn_{idx + 1}")
-        five_turn_ids.append(int(body["turn_id"]))
+        five_turn_ids.append(int(body["session_turn_id"]))
 
     status, body = _get_json(client, f"/api/sessions/{session_id}/turns?page=1&page_size=20")
     _assert_status(status, 200, body, "list_turns")
@@ -131,7 +131,10 @@ def _run_contract_and_e2e() -> dict[str, Any]:
 
     status, body = _get_json(client, f"/api/sessions/{session_id}/turns/{five_turn_ids[-1]}")
     _assert_status(status, 200, body, "get_turn")
-    report["contract"]["get_turn"] = {"status": status, "turn_id": body["turn_id"]}
+    report["contract"]["get_turn"] = {
+        "status": status,
+        "session_turn_id": body["session_turn_id"],
+    }
 
     status, body = _get_json(client, f"/api/sessions/{session_id}/memory?format=summary")
     _assert_status(status, 200, body, "get_memory")
@@ -157,8 +160,11 @@ def _run_contract_and_e2e() -> dict[str, Any]:
         {"request_id": _new_request_id("reqsd")},
     )
     _assert_status(status, 200, body, "sandbox_discard")
-    discard_turn_id = int(body["turn_id"])
-    report["contract"]["sandbox_discard"] = {"status": status, "turn_id": discard_turn_id}
+    discard_turn_id = int(body["session_turn_id"])
+    report["contract"]["sandbox_discard"] = {
+        "status": status,
+        "session_turn_id": discard_turn_id,
+    }
 
     status, body = _post_json(
         client,
@@ -166,8 +172,11 @@ def _run_contract_and_e2e() -> dict[str, Any]:
         {"request_id": _new_request_id("reqsc")},
     )
     _assert_status(status, 200, body, "sandbox_commit")
-    commit_turn_id = int(body["turn_id"])
-    report["contract"]["sandbox_commit"] = {"status": status, "turn_id": commit_turn_id}
+    commit_turn_id = int(body["session_turn_id"])
+    report["contract"]["sandbox_commit"] = {
+        "status": status,
+        "session_turn_id": commit_turn_id,
+    }
 
     status, body = _post_json(
         client,
@@ -175,7 +184,10 @@ def _run_contract_and_e2e() -> dict[str, Any]:
         {"request_id": _new_request_id("reqrs"), "keep_character": True},
     )
     _assert_status(status, 200, body, "reset_session")
-    report["contract"]["reset"] = {"status": status, "current_turn_id": body["current_turn_id"]}
+    report["contract"]["reset"] = {
+        "status": status,
+        "current_session_turn_id": body["current_session_turn_id"],
+    }
 
     report["e2e"] = {
         "session_id": session_id,
@@ -219,7 +231,7 @@ def _run_restart_recovery() -> dict[str, Any]:
         },
     )
     _assert_status(status, 200, body, "restart_turn_before")
-    first_turn_id = int(body["turn_id"])
+    first_turn_id = int(body["session_turn_id"])
 
     app_after = create_app()
     _disable_gm_llm(app_after)
@@ -227,7 +239,7 @@ def _run_restart_recovery() -> dict[str, Any]:
 
     status, body = _get_json(client_after, f"/api/sessions/{session_id}")
     _assert_status(status, 200, body, "restart_get_session_after")
-    loaded_cursor = int(body["current_turn_id"])
+    loaded_cursor = int(body["current_session_turn_id"])
 
     status, body = _post_json(
         client_after,
@@ -239,14 +251,14 @@ def _run_restart_recovery() -> dict[str, Any]:
         },
     )
     _assert_status(status, 200, body, "restart_turn_after")
-    second_turn_id = int(body["turn_id"])
+    second_turn_id = int(body["session_turn_id"])
     assert second_turn_id >= first_turn_id + 1, (
         f"重启后回合未推进：first={first_turn_id}, second={second_turn_id}"
     )
 
     status, body = _get_json(client_after, f"/api/sessions/{session_id}")
     _assert_status(status, 200, body, "restart_get_session_final")
-    final_cursor = int(body["current_turn_id"])
+    final_cursor = int(body["current_session_turn_id"])
     assert final_cursor >= second_turn_id, (
         f"重启后会话游标异常：final={final_cursor}, second={second_turn_id}"
     )

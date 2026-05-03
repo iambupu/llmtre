@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sqlite3
 
 from game_workflows.async_watchers import GlobalEventWorkflow, WorkflowOuterLoopBridge
@@ -102,6 +103,32 @@ def test_workflow_outer_loop_bridge_achievement_dedup_persists_with_db(tmp_path)
             ("player_01", "first_blood"),
         ).fetchone()[0]
     assert int(count) == 1
+
+
+def test_workflow_outer_loop_reward_without_entity_table_does_not_warn(tmp_path, caplog):
+    """
+    功能：验证外环成就奖励在最小运行库缺少实体表时按降级跳过，不产生噪声警告。
+    入参：tmp_path；caplog。
+    出参：None。
+    异常：断言失败表示外环奖励写入降级策略回归。
+    """
+    db_path = tmp_path / "tre_state.db"
+    workflow = GlobalEventWorkflow(timeout=60, verbose=False, db_path=str(db_path))
+    bridge = WorkflowOuterLoopBridge(workflow=workflow)
+
+    with caplog.at_level(logging.WARNING, logger="Workflow.AsyncWatchers"):
+        result = asyncio.run(
+            bridge.emit_state_changed(
+                StateChangedEvent(
+                    entity_id="player_01",
+                    diff={"target_hp_delta": -6},
+                    is_sandbox=False,
+                )
+            )
+        )
+
+    assert "first_blood" in str(result)
+    assert "外环成就奖励写入失败" not in caplog.text
 
 
 def test_workflow_outer_loop_bridge_world_evolution_updates_world_state(tmp_path):

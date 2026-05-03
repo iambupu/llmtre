@@ -449,16 +449,75 @@ def _emit_sse_detail_events(
     出参：None。
     异常：不抛业务异常；字段缺失使用空值降级。
     """
-    scene_snapshot = payload.get("scene_snapshot") if isinstance(payload.get("scene_snapshot"), dict) else {}
-    current_location = (
-        scene_snapshot.get("current_location")
-        if isinstance(scene_snapshot.get("current_location"), dict)
-        else {}
+    raw_scene_snapshot = payload.get("scene_snapshot")
+    scene_snapshot: dict[str, Any] = (
+        raw_scene_snapshot if isinstance(raw_scene_snapshot, dict) else {}
     )
-    target_queue.put(("loading_scene_detail", {"message": "场景快照已读取", "detail": {"location_id": current_location.get("id"), "location_name": current_location.get("name"), "exits_count": len(scene_snapshot.get("exits", [])) if isinstance(scene_snapshot.get("exits"), list) else 0, "visible_npcs_count": len(scene_snapshot.get("visible_npcs", [])) if isinstance(scene_snapshot.get("visible_npcs"), list) else 0, "available_actions": scene_snapshot.get("available_actions", [])}}))
-    target_queue.put(("parsing_nlu_detail", {"message": "玩家意图解析完成", "detail": {"action_intent": payload.get("action_intent"), "outcome": payload.get("outcome"), "clarification_question": payload.get("clarification_question")}}))
-    target_queue.put(("validating_action_detail", {"message": "动作合法性校验完成", "detail": {"is_valid": payload.get("is_valid"), "errors": payload.get("errors", []), "should_advance_turn": payload.get("should_advance_turn")}}))
-    target_queue.put(("resolving_action_detail", {"message": "确定性结算完成", "detail": {"physics_diff": payload.get("physics_diff"), "should_write_story_memory": payload.get("should_write_story_memory")}}))
+    raw_current_location = scene_snapshot.get("current_location")
+    current_location: dict[str, Any] = (
+        raw_current_location if isinstance(raw_current_location, dict) else {}
+    )
+    target_queue.put(
+        (
+            "loading_scene_detail",
+            {
+                "message": "场景快照已读取",
+                "detail": {
+                    "location_id": current_location.get("id"),
+                    "location_name": current_location.get("name"),
+                    "exits_count": (
+                        len(scene_snapshot.get("exits", []))
+                        if isinstance(scene_snapshot.get("exits"), list)
+                        else 0
+                    ),
+                    "visible_npcs_count": (
+                        len(scene_snapshot.get("visible_npcs", []))
+                        if isinstance(scene_snapshot.get("visible_npcs"), list)
+                        else 0
+                    ),
+                    "available_actions": scene_snapshot.get("available_actions", []),
+                },
+            },
+        )
+    )
+    target_queue.put(
+        (
+            "parsing_nlu_detail",
+            {
+                "message": "玩家意图解析完成",
+                "detail": {
+                    "action_intent": payload.get("action_intent"),
+                    "outcome": payload.get("outcome"),
+                    "clarification_question": payload.get("clarification_question"),
+                },
+            },
+        )
+    )
+    target_queue.put(
+        (
+            "validating_action_detail",
+            {
+                "message": "动作合法性校验完成",
+                "detail": {
+                    "is_valid": payload.get("is_valid"),
+                    "errors": payload.get("errors", []),
+                    "should_advance_turn": payload.get("should_advance_turn"),
+                },
+            },
+        )
+    )
+    target_queue.put(
+        (
+            "resolving_action_detail",
+            {
+                "message": "确定性结算完成",
+                "detail": {
+                    "physics_diff": payload.get("physics_diff"),
+                    "should_write_story_memory": payload.get("should_write_story_memory"),
+                },
+            },
+        )
+    )
 
 
 def _run_turn_stream_with_lock(
@@ -530,7 +589,17 @@ def _run_turn_stream_with_lock(
         except Exception as err:  # noqa: BLE001
             stage = "api.response_built" if isinstance(err, ValidationError) else "api.persisted"
             trace_id, trace = _build_post_run_error_payload(payload, stage=stage, err=err)
-            target_queue.put(("error", {"code": "INTERNAL_ERROR", "message": f"回合执行失败: {err}", "trace_id": trace_id, "trace": trace}))
+            target_queue.put(
+                (
+                    "error",
+                    {
+                        "code": "INTERNAL_ERROR",
+                        "message": f"回合执行失败: {err}",
+                        "trace_id": trace_id,
+                        "trace": trace,
+                    },
+                )
+            )
 
 
 def _generate_turn_stream_events(
@@ -574,12 +643,43 @@ def _generate_turn_stream_events(
                     target_queue=event_queue,
                 )
         except TurnExecutionError as err:
-            logger.exception("回合执行失败: route=create_turn_stream session_id=%s request_body=%s", session_id, body)
-            message = "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。" if err.error_code == "TURN_TIMEOUT" else f"回合执行失败: {err}"
-            event_queue.put(("error", {"code": err.error_code, "message": message, "trace_id": err.trace_id, "trace": err.trace}))
+            logger.exception(
+                "回合执行失败: route=create_turn_stream session_id=%s request_body=%s",
+                session_id,
+                body,
+            )
+            message = (
+                "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。"
+                if err.error_code == "TURN_TIMEOUT"
+                else f"回合执行失败: {err}"
+            )
+            event_queue.put(
+                (
+                    "error",
+                    {
+                        "code": err.error_code,
+                        "message": message,
+                        "trace_id": err.trace_id,
+                        "trace": err.trace,
+                    },
+                )
+            )
         except Exception as err:  # noqa: BLE001
-            logger.exception("SSE worker 处理失败: route=create_turn_stream session_id=%s request_id=%s", session_id, request_id)
-            event_queue.put(("error", _build_worker_fallback_error_payload(trace_id=worker_trace_id, stage="api.worker", err=err)))
+            logger.exception(
+                "SSE worker 处理失败: route=create_turn_stream session_id=%s request_id=%s",
+                session_id,
+                request_id,
+            )
+            event_queue.put(
+                (
+                    "error",
+                    _build_worker_fallback_error_payload(
+                        trace_id=worker_trace_id,
+                        stage="api.worker",
+                        err=err,
+                    ),
+                )
+            )
 
     worker = threading.Thread(target=run_turn_worker, daemon=True)
     worker.start()
@@ -589,7 +689,14 @@ def _generate_turn_stream_events(
         except queue.Empty:
             if worker.is_alive():
                 continue
-            yield _sse("error", _build_worker_fallback_error_payload(trace_id=worker_trace_id, stage="api.worker", err=RuntimeError("worker exited without terminal event")))
+            yield _sse(
+                "error",
+                _build_worker_fallback_error_payload(
+                    trace_id=worker_trace_id,
+                    stage="api.worker",
+                    err=RuntimeError("worker exited without terminal event"),
+                ),
+            )
             return
         yield _sse(event_name, payload)
         if event_name in {"done", "error"}:
@@ -604,7 +711,10 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
     出参：Response(text/event-stream)，最终 `done` 事件携带普通回合响应负载。
     异常：前置参数错误返回普通 JSON 错误；执行中异常通过 SSE `error` 事件返回。
     """
-    parsed = _parse_and_validate_turn_request(session_id=session_id, route_name="create_turn_stream")
+    parsed = _parse_and_validate_turn_request(
+        session_id=session_id,
+        route_name="create_turn_stream",
+    )
     if len(parsed) == 1:
         return parsed[0]
     session, body, request_id, user_input, character_id, sandbox_mode = parsed

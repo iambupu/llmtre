@@ -165,6 +165,8 @@ def _sandbox_action(
                 turns=draft_turns,
                 max_turns=int(session["memory_policy"]["max_turns"]),
             )
+            raw_trace = payload.get("trace")
+            trace_payload: dict[str, Any] = raw_trace if isinstance(raw_trace, dict) else {}
             response_payload, _ = context.session_store.persist_turn_result_with_idempotency(
                 scope=scope,
                 session_id=session_id,
@@ -176,7 +178,7 @@ def _sandbox_action(
                 response_builder=lambda persisted_turn_id: _build_sandbox_response_payload(
                     payload=payload,
                     persisted_turn_id=persisted_turn_id,
-                    trace=payload.get("trace") if isinstance(payload.get("trace"), dict) else {},
+                    trace=trace_payload,
                 ),
             )
             return success(response_payload)

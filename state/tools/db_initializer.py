@@ -1,21 +1,29 @@
+# ruff: noqa: E402,I001
 import json
 import logging
 import os
 import sqlite3
+import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel
 
-from state.models.entity import EntityTemplate
+# 直接执行 `python state/tools/db_initializer.py` 时，Python 只把 state/tools
+# 放入 sys.path。这里显式补入仓库根目录，保证验收脚本与模块方式入口一致。
+BASE_DIR = str(Path(__file__).resolve().parents[2])
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from state.models.entity import EntityTemplate  # noqa: E402
 
 # 导入物理契约模型
-from state.models.item import ItemTemplate
-from state.tools.runtime_schema import ensure_runtime_tables
+from state.models.item import ItemTemplate  # noqa: E402
+from state.tools.runtime_schema import ensure_runtime_tables  # noqa: E402
 
 # 路径配置
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DB_PATH = os.path.join(BASE_DIR, "state", "core_data", "tre_state.db")
 DATA_DIR = os.path.join(BASE_DIR, "state", "data")
 MODS_DIR = os.path.join(BASE_DIR, "mods")

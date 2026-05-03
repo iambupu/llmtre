@@ -189,12 +189,16 @@ def test_graph_builder_persists_graph_index_with_configured_prompt(tmp_path, mon
     assert graph_index.storage_context.persist_dir == str(tmp_path / "graph")
 
 
-def test_graph_builder_logs_and_returns_none_on_build_error(tmp_path, monkeypatch, caplog) -> None:
+def test_graph_builder_logs_warning_and_returns_none_on_build_error(
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
     """
-    功能：验证图谱构建异常时记录错误日志并返回 None，不阻断全量 RAG 构建。
+    功能：验证图谱构建异常时记录降级警告并返回 None，不阻断全量 RAG 构建。
     入参：tmp_path；monkeypatch；caplog。
     出参：None。
-    异常：断言失败表示 graph 异常降级链路回归。
+    异常：断言失败表示 graph 异常降级链路或日志级别回归。
     """
     _FakeSettings.llm = object()
     _FakeGraphIndex.should_fail = True
@@ -202,7 +206,7 @@ def test_graph_builder_logs_and_returns_none_on_build_error(tmp_path, monkeypatc
     monkeypatch.setattr(graph_builder, "SchemaLLMPathExtractor", _FakeSchemaExtractor)
     monkeypatch.setattr(graph_builder, "PropertyGraphIndex", _FakeGraphIndex)
     builder = PropertyGraphIndexBuilder(str(tmp_path), {"property_graph": {"enabled": True}})
-    caplog.set_level("ERROR", logger="RAGManager.GraphBuilder")
+    caplog.set_level("WARNING", logger="RAGManager.GraphBuilder")
 
     assert builder.build([Document(text="规则")]) is None
-    assert "属性图谱构建过程中出错: graph failed" in caplog.text
+    assert "属性图谱构建失败，已降级跳过: graph failed" in caplog.text

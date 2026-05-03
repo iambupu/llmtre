@@ -1,3 +1,5 @@
+from typing import cast
+
 from llama_index.core.schema import BaseNode, NodeWithScore
 
 
@@ -26,7 +28,7 @@ def reciprocal_rank_fusion(
             if not isinstance(node_id, str) or not node_id:
                 # 降级路径：上游检索器偶发返回坏节点时跳过，保留其他合法召回结果。
                 continue
-            nodes_map[node_id] = node
+            nodes_map[node_id] = cast(BaseNode, node)
 
             # RRF Score = 1 / (rank + k)
             if node_id not in fused_scores:

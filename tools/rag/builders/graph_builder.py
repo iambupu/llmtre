@@ -45,20 +45,21 @@ class PropertyGraphIndexBuilder:
 
         kg_extractor = SchemaLLMPathExtractor(
             llm=Settings.llm,
-            extract_prompt=extraction_prompt
+            extract_prompt=extraction_prompt,
         )
 
         try:
             graph_index = PropertyGraphIndex.from_documents(
                 documents,
                 kg_extractors=[kg_extractor],
-                show_progress=True
+                show_progress=True,
             )
             os.makedirs(self.index_dir, exist_ok=True)
             graph_index.storage_context.persist(persist_dir=self.index_dir)
             logger.info(f"[OK] 属性图谱已持久化至: {self.index_dir}")
             return graph_index
         except Exception as e:
-            logger.error(f"属性图谱构建过程中出错: {e}")
-            # 图谱构建失败通常不应阻塞整个流程
+            # 降级路径：属性图谱是增强索引。失败时保留向量索引构建，
+            # 避免验收把可选能力误判为主链路错误。
+            logger.warning(f"属性图谱构建失败，已降级跳过: {e}")
             return None

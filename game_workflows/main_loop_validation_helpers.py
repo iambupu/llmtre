@@ -5,6 +5,7 @@ MainEventLoop 动作校验辅助函数。
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from state.contracts.agent import AgentEnvelope
@@ -56,8 +57,8 @@ def clarification_result(question: str) -> dict[str, Any]:
 
 def clarify_with_agent(
     loop: Any,
-    state: dict[str, Any],
-    action: dict[str, Any] | None,
+    state: Mapping[str, Any],
+    action: Mapping[str, Any] | None,
     fallback_question: str,
 ) -> str:
     """
@@ -90,30 +91,34 @@ def clarify_with_agent(
         return fallback_question
 
 
-def build_move_clarification(state: dict[str, Any]) -> str:
+def build_move_clarification(state: Mapping[str, Any]) -> str:
     """
     功能：根据当前出口生成移动澄清问题。
     入参：state（dict[str, Any]）：当前场景状态。
     出参：str，面向玩家的问题。
     异常：不抛异常；无出口时返回通用问题。
     """
-    scene_snapshot = state.get("scene_snapshot")
-    exits = scene_snapshot["exits"] if scene_snapshot else []
+    scene_snapshot_obj = state.get("scene_snapshot")
+    scene_snapshot = scene_snapshot_obj if isinstance(scene_snapshot_obj, dict) else {}
+    exits_raw = scene_snapshot.get("exits", [])
+    exits = exits_raw if isinstance(exits_raw, list) else []
     if not exits:
         return "这里暂时没有明确出口，你想先观察周围吗？"
     labels = "、".join(exit_info["label"] for exit_info in exits)
     return f"你想往哪个方向走？当前可选出口：{labels}。"
 
 
-def build_target_clarification(state: dict[str, Any], action_type: Any) -> str:
+def build_target_clarification(state: Mapping[str, Any], action_type: Any) -> str:
     """
     功能：根据可见 NPC 生成交谈或攻击目标澄清问题。
     入参：state（dict[str, Any]）：当前场景状态；action_type（Any）：候选动作类型。
     出参：str，面向玩家的问题。
     异常：不抛异常；无可见对象时返回通用问题。
     """
-    scene_snapshot = state.get("scene_snapshot")
-    npcs = scene_snapshot["visible_npcs"] if scene_snapshot else []
+    scene_snapshot_obj = state.get("scene_snapshot")
+    scene_snapshot = scene_snapshot_obj if isinstance(scene_snapshot_obj, dict) else {}
+    npcs_raw = scene_snapshot.get("visible_npcs", [])
+    npcs = npcs_raw if isinstance(npcs_raw, list) else []
     verb = "攻击" if action_type == "attack" else "交谈"
     if not npcs:
         return f"你想和谁{verb}？当前没有明确可见目标。"
@@ -121,7 +126,7 @@ def build_target_clarification(state: dict[str, Any], action_type: Any) -> str:
     return f"你想{verb}哪个目标？当前可见目标：{labels}。"
 
 
-def is_reachable_location(state: dict[str, Any], location_id: str) -> bool:
+def is_reachable_location(state: Mapping[str, Any], location_id: str) -> bool:
     """
     功能：判断目标地点是否属于当前场景出口，用于阻止 NLU 生成越界移动。
     入参：state（dict[str, Any]）：当前回合状态；location_id（str）：候选目标地点。
@@ -176,8 +181,8 @@ def _validate_attack(loop: Any, action: dict[str, Any], errors: list[str]) -> No
 
 def _validate_move(
     loop: Any,
-    state: dict[str, Any],
-    action: dict[str, Any],
+    state: Mapping[str, Any],
+    action: Mapping[str, Any],
     errors: list[str],
 ) -> dict[str, Any] | None:
     """
@@ -199,7 +204,9 @@ def _validate_move(
     return None
 
 
-def _validate_sandbox_action(state: dict[str, Any], action_type: Any, errors: list[str]) -> None:
+def _validate_sandbox_action(
+    state: Mapping[str, Any], action_type: Any, errors: list[str]
+) -> None:
     """
     功能：校验沙盒控制动作仅在沙盒模式下可执行。
     入参：state（dict[str, Any]）：当前回合状态；action_type（Any）：动作类型；
@@ -213,9 +220,9 @@ def _validate_sandbox_action(state: dict[str, Any], action_type: Any, errors: li
 
 def _validate_use_item(
     loop: Any,
-    state: dict[str, Any],
-    action: dict[str, Any],
-    active_character: dict[str, Any],
+    state: Mapping[str, Any],
+    action: Mapping[str, Any],
+    active_character: Mapping[str, Any],
     errors: list[str],
 ) -> dict[str, Any] | None:
     """
@@ -243,7 +250,7 @@ def _validate_use_item(
     return None
 
 
-def validate_action_sync(loop: Any, state: dict[str, Any]) -> dict[str, Any]:
+def validate_action_sync(loop: Any, state: Mapping[str, Any]) -> dict[str, Any]:
     """
     功能：同步执行动作校验逻辑；所有候选动作必须在这里完成确定性合法性确认。
     入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：候选动作与场景状态。

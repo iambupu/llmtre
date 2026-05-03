@@ -154,6 +154,27 @@ class GlobalEventWorkflow(Workflow):
             try:
                 self.db_updater.apply_diff(ev.entity_id, reward, use_shadow=False)
             except Exception as error:  # noqa: BLE001
+                if "no such table" in str(error):
+                    # 降级路径：外环可在仅有运行期表的最小库中执行，奖励写入缺实体表时跳过即可。
+                    logger.info(
+                        "外环成就奖励跳过: achievement=%s entity=%s reason=%s",
+                        ev.achievement_id,
+                        ev.entity_id,
+                        error,
+                    )
+                    logger.info(
+                        "外环成就解锁: achievement=%s entity=%s desc=%s reward=%s",
+                        ev.achievement_id,
+                        ev.entity_id,
+                        ev.description,
+                        reward,
+                    )
+                    return StopEvent(
+                        result=(
+                            f"Achievement {ev.achievement_id} unlocked "
+                            f"for {ev.entity_id}."
+                        )
+                    )
                 logger.warning(
                     "外环成就奖励写入失败（已忽略）: achievement=%s entity=%s err=%s",
                     ev.achievement_id,

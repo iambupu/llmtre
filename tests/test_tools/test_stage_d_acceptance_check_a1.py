@@ -68,7 +68,7 @@ class _FakeClient:
             return _FakeResponse(201, {"session_id": self.session_id})
         if path.endswith("/turns"):
             self.turn_counter += 1
-            return _FakeResponse(200, {"turn_id": self.turn_counter})
+            return _FakeResponse(200, {"session_turn_id": self.turn_counter})
         if path.endswith("/memory/refresh"):
             return _FakeResponse(
                 200,
@@ -76,13 +76,13 @@ class _FakeClient:
             )
         if path.endswith("/sandbox/discard"):
             self.turn_counter += 1
-            return _FakeResponse(200, {"turn_id": self.turn_counter})
+            return _FakeResponse(200, {"session_turn_id": self.turn_counter})
         if path.endswith("/sandbox/commit"):
             self.turn_counter += 1
-            return _FakeResponse(200, {"turn_id": self.turn_counter})
+            return _FakeResponse(200, {"session_turn_id": self.turn_counter})
         if path.endswith("/reset"):
             self.turn_counter = 0
-            return _FakeResponse(200, {"current_turn_id": self.turn_counter})
+            return _FakeResponse(200, {"current_session_turn_id": self.turn_counter})
         return _FakeResponse(404, {"error": "unknown post"})
 
     def get(self, path: str) -> _FakeResponse:
@@ -99,9 +99,12 @@ class _FakeClient:
             return _FakeResponse(200, {"total": max(self.turn_counter, 5)})
         turn_detail = re.search(r"/turns/(?P<turn_id>\d+)$", path)
         if turn_detail:
-            return _FakeResponse(200, {"turn_id": int(turn_detail.group("turn_id"))})
+            return _FakeResponse(
+                200,
+                {"session_turn_id": int(turn_detail.group("turn_id"))},
+            )
         if path == f"/api/sessions/{self.session_id}":
-            return _FakeResponse(200, {"current_turn_id": self.turn_counter})
+            return _FakeResponse(200, {"current_session_turn_id": self.turn_counter})
         return _FakeResponse(404, {"error": "unknown get"})
 
 
@@ -194,7 +197,7 @@ def test_run_contract_and_e2e_returns_acceptance_report(monkeypatch) -> None:
     assert report["contract"]["create_session"]["status"] == 201
     assert report["contract"]["list_turns"]["total"] >= 5
     assert report["contract"]["get_memory"]["summary_len"] > 0
-    assert report["contract"]["reset"]["current_turn_id"] == 0
+    assert report["contract"]["reset"]["current_session_turn_id"] == 0
     assert report["e2e"]["five_turn_ids"] == [1, 2, 3, 4, 5]
     assert report["e2e"]["discard_turn_id"] == 6
     assert report["e2e"]["commit_turn_id"] == 7

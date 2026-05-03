@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -235,3 +237,24 @@ def test_initialize_db_merges_mods_rejects_bad_data_and_imports_inventory(
     assert entity_row == ("玩家", 10, 10)
     assert "数据 [bad_item] 合并后违反契约，已被拒绝加载" in caplog.text
     assert "数据库初始化及 MOD 数据合并成功" in caplog.text
+
+
+def test_db_initializer_script_runs_from_project_root() -> None:
+    """
+    功能：验证 `python state/tools/db_initializer.py` 直跑时能解析仓库内包导入。
+    入参：无。
+    出参：None。
+    异常：子进程退出码非 0 时断言失败，说明脚本入口导入路径回归。
+    """
+    # 验收命令要求直接执行脚本；这里不加 PYTHONPATH，复现真实 A1 初始化入口。
+    script_path = Path("state") / "tools" / "db_initializer.py"
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout

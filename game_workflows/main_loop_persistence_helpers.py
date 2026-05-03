@@ -5,12 +5,13 @@ MainEventLoop 持久化写链辅助函数。
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 logger = logging.getLogger("Workflow.MainLoop")
 
 
-def build_write_plan(loop: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
+def build_write_plan(loop: Any, state: Mapping[str, Any]) -> list[dict[str, Any]]:
     """
     功能：根据动作类型与结算差异生成数据库写计划，定义事务内执行顺序。
     入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：当前回合状态。
@@ -85,32 +86,36 @@ def execute_write_op(loop: Any, op: dict[str, Any], conn: Any | None = None) -> 
     """
     op_type = str(op.get("type", ""))
     if op_type == "fork_shadow":
-        return loop.db_updater.fork_shadow_state(conn=conn)
+        return bool(loop.db_updater.fork_shadow_state(conn=conn))
     if op_type == "merge_shadow":
-        return loop.db_updater.merge_shadow_state(conn=conn)
+        return bool(loop.db_updater.merge_shadow_state(conn=conn))
     if op_type == "drop_shadow":
-        return loop.db_updater.drop_shadow_state(conn=conn)
+        return bool(loop.db_updater.drop_shadow_state(conn=conn))
     if op_type == "apply_diff":
-        return loop.db_updater.apply_diff(
-            entity_id=str(op.get("entity_id", "")),
-            diff=dict(op.get("diff", {})),
-            use_shadow=bool(op.get("use_shadow", False)),
-            conn=conn,
+        return bool(
+            loop.db_updater.apply_diff(
+                entity_id=str(op.get("entity_id", "")),
+                diff=dict(op.get("diff", {})),
+                use_shadow=bool(op.get("use_shadow", False)),
+                conn=conn,
+            )
         )
     if op_type == "consume_item":
-        return loop.db_updater.consume_item(
-            owner_id=str(op.get("owner_id", "")),
-            item_id=str(op.get("item_id", "")),
-            quantity=int(op.get("quantity", 1)),
-            use_shadow=bool(op.get("use_shadow", False)),
-            conn=conn,
+        return bool(
+            loop.db_updater.consume_item(
+                owner_id=str(op.get("owner_id", "")),
+                item_id=str(op.get("item_id", "")),
+                quantity=int(op.get("quantity", 1)),
+                use_shadow=bool(op.get("use_shadow", False)),
+                conn=conn,
+            )
         )
     if op_type == "advance_turn":
-        return loop.db_updater.advance_turn(turns=int(op.get("turns", 1)), conn=conn)
+        return bool(loop.db_updater.advance_turn(turns=int(op.get("turns", 1)), conn=conn))
     return False
 
 
-def update_state_sync(loop: Any, state: dict[str, Any]) -> dict[str, Any]:
+def update_state_sync(loop: Any, state: Mapping[str, Any]) -> dict[str, Any]:
     """
     功能：在事件总线事务拦截器内执行写计划，并回传回合推进后的状态补丁。
     入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：当前回合状态。

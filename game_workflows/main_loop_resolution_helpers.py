@@ -5,6 +5,7 @@ MainEventLoop 动作结算辅助函数。
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any, cast
 
 from tools.roll.dice_roller import check_success, roll_d20, roll_dice
@@ -12,7 +13,7 @@ from tools.roll.dice_roller import check_success, roll_d20, roll_dice
 logger = logging.getLogger("Workflow.MainLoop")
 
 
-def resolve_action_sync(loop: Any, state: dict[str, Any]) -> dict[str, Any]:
+def resolve_action_sync(loop: Any, state: Mapping[str, Any]) -> dict[str, Any]:
     """
     功能：同步执行动作结算逻辑；数值变化仅来自确定性规则和骰子工具。
     入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：已通过校验的动作状态。

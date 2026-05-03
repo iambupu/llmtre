@@ -4,6 +4,7 @@
 !/knowledge_base/indices/.gitkeep
 /state/core_data/
 /logs/
+/test_runs/
 *.db
 *.db-*
 *.sqlite
