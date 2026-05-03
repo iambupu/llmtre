@@ -643,170 +643,147 @@ class GMAgent:
         actor_name = str(character.get("name", "旅者"))
 
         if state.get("turn_outcome") == "clarification":
-            question = str(state.get("clarification_question") or "你能再具体说明一下吗？")
-            return question
-
+            return str(state.get("clarification_question") or "你能再具体说明一下吗？")
         if not state.get("is_valid", False):
             raw_errors = state.get("validation_errors", ["行动未能成立。"])
-            errors = (
-                [str(error) for error in raw_errors]
-                if isinstance(raw_errors, list)
-                else ["行动未能成立。"]
-            )
+            errors = [str(error) for error in raw_errors] if isinstance(raw_errors, list) else ["行动未能成立。"]
             template = str(self.templates.get("invalid", "{actor_name}的行动未能成立：{errors}"))
             return template.format(actor_name=actor_name, errors="；".join(errors))
-
         if not action:
             template = str(self.templates.get("idle", "{actor_name}暂时没有采取有效行动。"))
             return template.format(actor_name=actor_name)
 
         action_type = str(action.get("type", "unknown"))
         physics_diff = self._as_mapping(state.get("physics_diff"))
+        renderer = self._get_template_renderer(action_type)
+        if renderer is None:
+            template = str(self.templates.get("default", "{actor_name}完成了 {action_type} 行动。"))
+            return template.format(actor_name=actor_name, action_type=action_type)
+        return renderer(actor_name, action, physics_diff, state)
 
-        if action_type == "attack":
-            target_id = str(action.get("target_id", "未知目标"))
-            if not bool(physics_diff.get("attack_hit", False)):
-                attack_roll = self._to_int(physics_diff.get("attack_roll", 0))
-                attack_dc = self._to_int(physics_diff.get("attack_dc", 0))
-                template = str(
-                    self.templates.get(
-                        "attack_miss",
-                        (
-                            "{actor_name}发起了攻击，但未能命中 {target_id}。"
-                            "判定 {attack_roll} 未达到 {attack_dc}。"
-                        ),
-                    )
-                )
-                return template.format(
-                    actor_name=actor_name,
-                    target_id=target_id,
-                    attack_roll=attack_roll,
-                    attack_dc=attack_dc,
-                )
-            damage = abs(self._to_int(physics_diff.get("target_hp_delta", 0)))
-            attack_roll = self._to_int(physics_diff.get("attack_roll", 0))
-            attack_dc = self._to_int(physics_diff.get("attack_dc", 0))
-            template = str(
-                self.templates.get(
-                    "attack_hit",
-                    (
-                        "{actor_name}发起了攻击，判定 {attack_roll} 超过 {attack_dc}，"
-                        "对 {target_id} 造成了 {damage} 点伤害。"
-                    ),
-                )
-            )
+    def _get_template_renderer(
+        self,
+        action_type: str,
+    ) -> Callable[[str, dict[str, Any], dict[str, Any], dict[str, Any]], str] | None:
+        """
+        功能：按动作类型返回对应模板渲染函数，避免主函数长分支。
+        入参：action_type（str）：动作类型。
+        出参：Callable 或 None；未命中返回 None 走默认模板。
+        异常：不抛异常；纯查表逻辑。
+        """
+        renderers: dict[str, Callable[[str, dict[str, Any], dict[str, Any], dict[str, Any]], str]] = {
+            "attack": self._render_attack_template,
+            "talk": self._render_talk_template,
+            "move": self._render_move_template,
+            "observe": self._render_observe_template,
+            "wait": self._render_wait_template,
+            "rest": self._render_rest_template,
+            "inspect": self._render_inspect_template,
+            "use_item": self._render_use_item_template,
+            "interact": self._render_interact_template,
+            "commit_sandbox": self._render_commit_sandbox_template,
+            "discard_sandbox": self._render_discard_sandbox_template,
+        }
+        return renderers.get(action_type)
+
+    def _render_attack_template(
+        self,
+        actor_name: str,
+        action: dict[str, Any],
+        physics_diff: dict[str, Any],
+        state: dict[str, Any],
+    ) -> str:
+        """
+        功能：渲染攻击动作模板，命中与未命中分支复用同一函数。
+        入参：actor_name/action/physics_diff/state（state 为统一签名预留）。
+        出参：str，攻击动作叙事文本。
+        异常：模板格式化异常向上抛出。
+        """
+        del state
+        target_id = str(action.get("target_id", "未知目标"))
+        attack_roll = self._to_int(physics_diff.get("attack_roll", 0))
+        attack_dc = self._to_int(physics_diff.get("attack_dc", 0))
+        if not bool(physics_diff.get("attack_hit", False)):
+            template = str(self.templates.get("attack_miss", "{actor_name}发起了攻击，但未能命中 {target_id}。判定 {attack_roll} 未达到 {attack_dc}。"))
             return template.format(
                 actor_name=actor_name,
                 target_id=target_id,
                 attack_roll=attack_roll,
                 attack_dc=attack_dc,
-                damage=damage,
             )
+        damage = abs(self._to_int(physics_diff.get("target_hp_delta", 0)))
+        template = str(self.templates.get("attack_hit", "{actor_name}发起了攻击，判定 {attack_roll} 超过 {attack_dc}，对 {target_id} 造成了 {damage} 点伤害。"))
+        return template.format(
+            actor_name=actor_name,
+            target_id=target_id,
+            attack_roll=attack_roll,
+            attack_dc=attack_dc,
+            damage=damage,
+        )
 
-        if action_type == "talk":
-            target_id = str(action.get("target_id") or "附近的存在")
-            mp_cost = abs(min(0, self._to_int(physics_diff.get("mp_delta", 0))))
-            template = str(
-                self.templates.get(
-                    "talk",
-                    "{actor_name}与 {target_id} 进行交谈，消耗了 {mp_cost} 点法力。",
-                )
-            )
-            return template.format(actor_name=actor_name, target_id=target_id, mp_cost=mp_cost)
+    def _render_talk_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染交谈动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del state
+        target_id = str(action.get("target_id") or "附近的存在")
+        mp_cost = abs(min(0, self._to_int(physics_diff.get("mp_delta", 0))))
+        return str(self.templates.get("talk", "{actor_name}与 {target_id} 进行交谈，消耗了 {mp_cost} 点法力。")).format(actor_name=actor_name, target_id=target_id, mp_cost=mp_cost)
 
-        if action_type == "move":
-            parameters = self._as_mapping(action.get("parameters"))
-            location_id = str(parameters.get("location_id", "未知地点"))
-            mp_cost = abs(min(0, self._to_int(physics_diff.get("mp_delta", 0))))
-            template = str(
-                self.templates.get(
-                    "move",
-                    "{actor_name}前往了 {location_id}，消耗了 {mp_cost} 点法力。",
-                )
-            )
-            return template.format(actor_name=actor_name, location_id=location_id, mp_cost=mp_cost)
+    def _render_move_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染移动动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del state
+        parameters = self._as_mapping(action.get("parameters"))
+        location_id = str(parameters.get("location_id", "未知地点"))
+        mp_cost = abs(min(0, self._to_int(physics_diff.get("mp_delta", 0))))
+        return str(self.templates.get("move", "{actor_name}前往了 {location_id}，消耗了 {mp_cost} 点法力。")).format(actor_name=actor_name, location_id=location_id, mp_cost=mp_cost)
 
-        if action_type == "observe":
-            scene = self._as_mapping(state.get("scene_snapshot"))
-            current_location = self._as_mapping(scene.get("current_location"))
-            scene_description = str(
-                current_location.get("description")
-                or current_location.get("name")
-                or "周围暂时没有新的细节。"
-            )
-            template = str(
-                self.templates.get("observe", "{actor_name}观察周围：{scene_description}")
-            )
-            return template.format(actor_name=actor_name, scene_description=scene_description)
+    def _render_observe_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染观察动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, physics_diff
+        scene = self._as_mapping(state.get("scene_snapshot"))
+        current_location = self._as_mapping(scene.get("current_location"))
+        scene_description = str(current_location.get("description") or current_location.get("name") or "周围暂时没有新的细节。")
+        return str(self.templates.get("observe", "{actor_name}观察周围：{scene_description}")).format(actor_name=actor_name, scene_description=scene_description)
 
-        if action_type == "wait":
-            template = str(
-                self.templates.get("wait", "{actor_name}停下来片刻，留意周围的动静。")
-            )
-            return template.format(actor_name=actor_name)
+    def _render_wait_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染等待动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, physics_diff, state
+        return str(self.templates.get("wait", "{actor_name}停下来片刻，留意周围的动静。")).format(actor_name=actor_name)
 
-        if action_type == "rest":
-            hp_delta = self._to_int(physics_diff.get("hp_delta", 0))
-            mp_delta = self._to_int(physics_diff.get("mp_delta", 0))
-            template = str(
-                self.templates.get(
-                    "rest",
-                    "{actor_name}短暂休息，恢复了 {hp_delta} 点生命与 {mp_delta} 点法力。",
-                )
-            )
-            return template.format(actor_name=actor_name, hp_delta=hp_delta, mp_delta=mp_delta)
+    def _render_rest_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染休息动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, state
+        hp_delta = self._to_int(physics_diff.get("hp_delta", 0))
+        mp_delta = self._to_int(physics_diff.get("mp_delta", 0))
+        return str(self.templates.get("rest", "{actor_name}短暂休息，恢复了 {hp_delta} 点生命与 {mp_delta} 点法力。")).format(actor_name=actor_name, hp_delta=hp_delta, mp_delta=mp_delta)
 
-        if action_type == "inspect":
-            template = str(
-                self.templates.get(
-                    "inspect",
-                    "{actor_name}仔细检查当前场景，确认了可走的方向与可互动目标。",
-                )
-            )
-            return template.format(actor_name=actor_name)
+    def _render_inspect_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染检查动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, physics_diff, state
+        return str(self.templates.get("inspect", "{actor_name}仔细检查当前场景，确认了可走的方向与可互动目标。")).format(actor_name=actor_name)
 
-        if action_type == "use_item":
-            parameters = self._as_mapping(action.get("parameters"))
-            item_id = str(parameters.get("item_id", "未知物品"))
-            hp_delta = self._to_int(physics_diff.get("hp_delta", 0))
-            template = str(
-                self.templates.get(
-                    "use_item",
-                    "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。",
-                )
-            )
-            return template.format(actor_name=actor_name, item_id=item_id, hp_delta=hp_delta)
+    def _render_use_item_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染使用物品动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del state
+        parameters = self._as_mapping(action.get("parameters"))
+        item_id = str(parameters.get("item_id", "未知物品"))
+        hp_delta = self._to_int(physics_diff.get("hp_delta", 0))
+        return str(self.templates.get("use_item", "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。")).format(actor_name=actor_name, item_id=item_id, hp_delta=hp_delta)
 
-        if action_type == "interact":
-            mp_cost = abs(min(0, self._to_int(physics_diff.get("mp_delta", 0))))
-            template = str(
-                self.templates.get(
-                    "interact",
-                    "{actor_name}仔细观察了周围环境，消耗了 {mp_cost} 点法力。",
-                )
-            )
-            return template.format(actor_name=actor_name, mp_cost=mp_cost)
+    def _render_interact_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染交互动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, state
+        mp_cost = abs(min(0, self._to_int(physics_diff.get("mp_delta", 0))))
+        return str(self.templates.get("interact", "{actor_name}仔细观察了周围环境，消耗了 {mp_cost} 点法力。")).format(actor_name=actor_name, mp_cost=mp_cost)
 
-        if action_type == "commit_sandbox":
-            template = str(
-                self.templates.get(
-                    "commit_sandbox",
-                    "{actor_name}将沙盒剧情并入了主线，当前世界状态已更新。",
-                )
-            )
-            return template.format(actor_name=actor_name)
+    def _render_commit_sandbox_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染并入沙盒动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, physics_diff, state
+        return str(self.templates.get("commit_sandbox", "{actor_name}将沙盒剧情并入了主线，当前世界状态已更新。")).format(actor_name=actor_name)
 
-        if action_type == "discard_sandbox":
-            template = str(
-                self.templates.get(
-                    "discard_sandbox",
-                    "{actor_name}放弃了沙盒剧情，世界状态已回滚到主线。",
-                )
-            )
-            return template.format(actor_name=actor_name)
-
-        template = str(self.templates.get("default", "{actor_name}完成了 {action_type} 行动。"))
-        return template.format(actor_name=actor_name, action_type=action_type)
+    def _render_discard_sandbox_template(self, actor_name: str, action: dict[str, Any], physics_diff: dict[str, Any], state: dict[str, Any]) -> str:
+        """功能：渲染放弃沙盒动作模板。入参：actor_name/action/physics_diff/state。出参：str。异常：模板格式化异常向上抛出。"""
+        del action, physics_diff, state
+        return str(self.templates.get("discard_sandbox", "{actor_name}放弃了沙盒剧情，世界状态已回滚到主线。")).format(actor_name=actor_name)
 
     def _as_mapping(self, value: Any) -> dict[str, Any]:
         """

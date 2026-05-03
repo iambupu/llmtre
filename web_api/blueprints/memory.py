@@ -11,6 +11,7 @@ from web_api.service import (
     error,
     get_runtime_context,
     get_session,
+    logger,
     now_iso,
     parse_json_body,
     success,
@@ -30,12 +31,15 @@ def get_memory(session_id: str) -> tuple[Any, int]:
     异常：format 非法时返回 INVALID_ARGUMENT。
     """
     if not validate_session_id(session_id):
+        logger.warning("get_memory 参数非法: session_id=%s", session_id)
         return error("INVALID_ARGUMENT", "session_id 格式非法", 400)
     session = get_session(session_id)
     if session is None:
+        logger.warning("get_memory 会话不存在: session_id=%s", session_id)
         return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
     fmt = str(request.args.get("format", "summary"))
     if fmt not in {"summary", "raw"}:
+        logger.warning("get_memory 参数非法: format=%s", fmt)
         return error("INVALID_ARGUMENT", "format 仅支持 summary/raw", 400)
 
     context = get_runtime_context()
@@ -46,6 +50,7 @@ def get_memory(session_id: str) -> tuple[Any, int]:
     )
     summary, recent_turns = build_memory(recent_turns, max_turns)
     text = summary if fmt == "summary" else "\n".join(item["text"] for item in recent_turns)
+    logger.info("get_memory 查询成功: session_id=%s format=%s", session_id, fmt)
     return success(
         {
             "session_id": session_id,
@@ -66,16 +71,20 @@ def refresh_memory(session_id: str) -> tuple[Any, int]:
     异常：参数非法返回 INVALID_ARGUMENT；会话缺失返回 SESSION_NOT_FOUND。
     """
     if not validate_session_id(session_id):
+        logger.warning("refresh_memory 参数非法: session_id=%s", session_id)
         return error("INVALID_ARGUMENT", "session_id 格式非法", 400)
     session = get_session(session_id)
     if session is None:
+        logger.warning("refresh_memory 会话不存在: session_id=%s", session_id)
         return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
     body = parse_json_body()
     request_id = validate_request_id(body)
     if request_id is None:
+        logger.warning("refresh_memory 参数非法: request_id 缺失或格式非法")
         return error("INVALID_ARGUMENT", "request_id 缺失或格式非法", 400)
     max_turns = body.get("max_turns", session["memory_policy"]["max_turns"])
     if not isinstance(max_turns, int) or not (MIN_MEMORY_TURNS <= max_turns <= MAX_MEMORY_TURNS):
+        logger.warning("refresh_memory 参数非法: max_turns=%s", max_turns)
         return error("INVALID_ARGUMENT", "max_turns 需在 5..100", 400)
 
     context = get_runtime_context()
@@ -87,6 +96,11 @@ def refresh_memory(session_id: str) -> tuple[Any, int]:
             request_id=request_id,
         )
         if existing is not None:
+            logger.info(
+                "refresh_memory 幂等命中: session_id=%s request_id=%s",
+                session_id,
+                request_id,
+            )
             return success(existing)
         memory_policy = {"mode": "auto", "max_turns": max_turns}
         context.session_store.update_memory_policy(
@@ -117,5 +131,10 @@ def refresh_memory(session_id: str) -> tuple[Any, int]:
             session_id=session_id,
             request_id=request_id,
             response_payload=payload,
+        )
+        logger.info(
+            "refresh_memory 重建成功: session_id=%s max_turns=%s",
+            session_id,
+            max_turns,
         )
         return success(payload)

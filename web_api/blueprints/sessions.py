@@ -12,6 +12,7 @@ from web_api.service import (
     get_play_state,
     get_runtime_context,
     get_session,
+    logger,
     new_session_id,
     now_iso,
     parse_json_body,
@@ -35,6 +36,8 @@ def create_session() -> tuple[Any, int]:
     body = parse_json_body()
     request_id = validate_request_id(body)
     if request_id is None:
+        # 关键分支：无 request_id 时直接拒绝，日志用于定位前端幂等键丢失问题。
+        logger.warning("create_session 参数非法: request_id 缺失或格式非法")
         return error("INVALID_ARGUMENT", "request_id 缺失或格式非法", 400)
 
     context = get_runtime_context()
@@ -44,12 +47,16 @@ def create_session() -> tuple[Any, int]:
         request_id=request_id,
     )
     if existing is not None:
+        # 幂等边界：命中缓存时不重复创建会话，记录命中日志便于核查重复提交。
+        logger.info("create_session 幂等命中: request_id=%s", request_id)
         return success(existing, status_code=201)
 
     character_id = str(body.get("character_id", "player_01"))
     if not validate_character_id(character_id):
+        logger.warning("create_session 参数非法: character_id 格式非法=%s", character_id)
         return error("INVALID_ARGUMENT", "character_id 格式非法", 400)
     if not ensure_character_available(character_id):
+        logger.warning("create_session 角色不存在: character_id=%s", character_id)
         return error("CHARACTER_NOT_FOUND", "角色不存在，无法创建会话", 404)
 
     sandbox_mode = bool(body.get("sandbox_mode", False))
@@ -78,6 +85,7 @@ def create_session() -> tuple[Any, int]:
         request_id=request_id,
         response_payload=response_payload,
     )
+    logger.info("create_session 创建成功: session_id=%s character_id=%s", session_id, character_id)
     return success(response_payload, status_code=201)
 
 
@@ -90,9 +98,11 @@ def get_session_detail(session_id: str) -> tuple[Any, int]:
     异常：参数非法返回 INVALID_ARGUMENT。
     """
     if not validate_session_id(session_id):
+        logger.warning("get_session_detail 参数非法: session_id=%s", session_id)
         return error("INVALID_ARGUMENT", "session_id 格式非法", 400)
     session = get_session(session_id)
     if session is None:
+        logger.warning("get_session_detail 会话不存在: session_id=%s", session_id)
         return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
     payload = {
         "session_id": session["session_id"],
@@ -108,4 +118,5 @@ def get_session_detail(session_id: str) -> tuple[Any, int]:
             recent_memory=str(session.get("memory_summary", "")),
         )
     )
+    logger.info("get_session_detail 查询成功: session_id=%s", session_id)
     return success(payload)

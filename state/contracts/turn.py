@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from state.contracts.scene import SceneAffordance, SceneSnapshotV2
 
@@ -106,3 +106,26 @@ class TurnResult(BaseModel):
     debug_trace: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     trace: TurnTrace | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome_side_effect_flags(self) -> TurnResult:
+        """
+        功能：校验 A1 outcome 与回合推进、剧情记忆写入标志的一致性。
+        入参：self（TurnResult）：已完成字段级校验的回合响应契约实例。
+        出参：TurnResult，字段组合满足 A1 副作用边界时返回自身。
+        异常：当 valid_action 未同时推进和写剧情记忆，或 clarification/invalid
+            仍声明副作用时抛出 ValueError；
+            Pydantic 会将其包装为 ValidationError，供 API 与测试统一处理。
+        """
+        # outcome 是副作用边界的唯一来源，避免 API 层或调用方临时推断导致世界误推进。
+        if self.outcome == "valid_action":
+            if not self.should_advance_turn or not self.should_write_story_memory:
+                raise ValueError("valid_action must advance turn and write story memory")
+            return self
+
+        # 澄清与非法动作都属于非推进结果，不能写入剧情记忆或推进世界状态。
+        if self.should_advance_turn or self.should_write_story_memory:
+            raise ValueError(
+                "clarification and invalid outcomes must not advance or write story memory"
+            )
+        return self

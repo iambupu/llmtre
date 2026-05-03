@@ -53,19 +53,20 @@ class NLUActionCandidate(BaseModel):
 
 
 def normalize_action_candidate(
-    payload: dict[str, Any] | None,
+    payload: Any,
     *,
     raw_input: str,
     actor_id: str | None,
 ) -> dict[str, Any] | None:
     """
     功能：把规则或 LLM 输出强校验为主循环可消费的动作字典。
-    入参：payload（dict[str, Any] | None）：候选动作；raw_input（str）：玩家原文；
+    入参：payload（Any）：候选动作，必须是 dict；raw_input（str）：玩家原文；
         actor_id（str | None）：当前角色 ID，用于补齐缺省 actor。
     出参：dict[str, Any] | None，校验成功返回动作字典，失败返回 None。
     异常：内部捕获 ValidationError 并降级为 None；不向主循环抛出。
     """
-    if payload is None:
+    # LLM/规则层的脏输出必须先收敛类型；非对象候选不能进入 Pydantic 校验前置转换。
+    if not isinstance(payload, dict):
         return None
     prepared = dict(payload)
     prepared.setdefault("raw_input", raw_input)

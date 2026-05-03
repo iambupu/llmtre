@@ -84,11 +84,15 @@ class SQLRouter:
 
     def query_raw(self, sql: str) -> list[dict[str, Any]]:
         """
-        功能：执行原始 SQL 查询。
-        入参：sql。
-        出参：List[Dict[str, Any]]。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        功能：执行原始只读 SQL 查询。
+        入参：sql（str）：只允许 SELECT/WITH/PRAGMA 开头的查询语句。
+        出参：list[dict[str, Any]]，每行转换为普通字典。
+        异常：SQL 不是只读查询时抛出 ValueError；数据库缺失或 SQL 执行异常向上抛出。
         """
+        normalized_sql = sql.lstrip().lower()
+        # 只读边界：RAG SQL 路由只能用于查询状态，禁止通过自然语言链路触发写副作用。
+        if not normalized_sql.startswith(("select", "with", "pragma")):
+            raise ValueError("SQLRouter 仅允许只读查询")
         self._ensure_initialized()
         if self._engine is None:
             return []

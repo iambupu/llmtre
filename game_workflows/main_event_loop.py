@@ -8,7 +8,6 @@ import asyncio
 import hashlib
 import logging
 import random
-import time
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any, cast
@@ -20,20 +19,67 @@ from agents.gm_agent import GMAgent
 from agents.nlu_agent import NLUAgent
 from core.event_bus import EventBus
 from core.runtime_logging import ensure_runtime_logging
-from game_workflows.affordances import build_scene_interaction_model
 from game_workflows.async_watchers import (
     NoOpOuterLoopBridge,
     OuterLoopBridge,
     WorkflowOuterLoopBridge,
 )
-from game_workflows.event_schemas import StateChangedEvent, TurnEndedEvent, WorldEvolutionEvent
 from game_workflows.graph_schema import CharacterState, FlowState, SceneExitState, SceneSnapshot
 from game_workflows.main_loop_config import load_main_loop_rules
+from game_workflows.main_loop_outer_helpers import (
+    emit_outer_events,
+    emit_outer_events_background,
+    replay_outbox_once,
+    schedule_outbox_replay,
+)
+from game_workflows.main_loop_persistence_helpers import (
+    build_write_plan as build_write_plan_helper,
+)
+from game_workflows.main_loop_persistence_helpers import (
+    execute_write_op as execute_write_op_helper,
+)
+from game_workflows.main_loop_persistence_helpers import (
+    update_state_sync as update_state_sync_helper,
+)
+from game_workflows.main_loop_resolution_helpers import (
+    resolve_action_sync as resolve_action_sync_helper,
+)
+from game_workflows.main_loop_scene_helpers import (
+    build_character_state as build_character_state_helper,
+)
+from game_workflows.main_loop_scene_helpers import (
+    build_scene_snapshot as build_scene_snapshot_helper,
+)
+from game_workflows.main_loop_scene_helpers import (
+    normalize_dict_list as normalize_dict_list_helper,
+)
+from game_workflows.main_loop_scene_helpers import (
+    normalize_scene_exits as normalize_scene_exits_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    build_move_clarification as build_move_clarification_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    build_target_clarification as build_target_clarification_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    clarification_result as clarification_result_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    clarify_with_agent as clarify_with_agent_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    invalid_result as invalid_result_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    is_reachable_location as is_reachable_location_helper,
+)
+from game_workflows.main_loop_validation_helpers import (
+    validate_action_sync as validate_action_sync_helper,
+)
 from game_workflows.rag_readonly_bridge import RAGReadOnlyBridge
-from state.contracts.agent import AgentEnvelope
 from state.contracts.turn import TurnRequestContext
 from tools.entity.entity_probes import EntityProbes
-from tools.roll.dice_roller import check_success, roll_d20, roll_dice
 from tools.sqlite_db.db_updater import DBUpdater
 
 ensure_runtime_logging()
@@ -202,62 +248,7 @@ class MainEventLoop:
         出参：list[dict[str, Any]]。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        action = state.get("action_intent") or {}
-        action_type = str(action.get("type", ""))
-        diff = state.get("physics_diff") or {}
-        is_sandbox = state.get("is_sandbox_mode", False)
-        entity_id = state["active_character_id"]
-        write_plan: list[dict[str, Any]] = []
-
-        if action_type == "commit_sandbox":
-            write_plan.append({"type": "merge_shadow"})
-            write_plan.append({"type": "drop_shadow"})
-            write_plan.append({"type": "advance_turn", "turns": 1})
-            return write_plan
-
-        if action_type == "discard_sandbox":
-            write_plan.append({"type": "drop_shadow"})
-            write_plan.append({"type": "advance_turn", "turns": 1})
-            return write_plan
-
-        if is_sandbox and not self.db_updater.has_shadow_state():
-            write_plan.append({"type": "fork_shadow"})
-
-        if diff:
-            write_plan.append(
-                {
-                    "type": "apply_diff",
-                    "entity_id": entity_id,
-                    "diff": diff,
-                    "use_shadow": is_sandbox,
-                }
-            )
-
-        consumed_item_id = diff.get("consumed_item_id")
-        if isinstance(consumed_item_id, str):
-            write_plan.append(
-                {
-                    "type": "consume_item",
-                    "owner_id": entity_id,
-                    "item_id": consumed_item_id,
-                    "use_shadow": is_sandbox,
-                }
-            )
-
-        target_id = action.get("target_id")
-        target_hp_delta = diff.get("target_hp_delta")
-        if target_id and isinstance(target_hp_delta, int):
-            write_plan.append(
-                {
-                    "type": "apply_diff",
-                    "entity_id": str(target_id),
-                    "diff": {"hp_delta": target_hp_delta},
-                    "use_shadow": is_sandbox,
-                }
-            )
-
-        write_plan.append({"type": "advance_turn", "turns": 1})
-        return write_plan
+        return build_write_plan_helper(self, state)
 
     def _execute_write_op(
         self,
@@ -270,31 +261,7 @@ class MainEventLoop:
         出参：bool。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        op_type = str(op.get("type", ""))
-        if op_type == "fork_shadow":
-            return self.db_updater.fork_shadow_state(conn=conn)
-        if op_type == "merge_shadow":
-            return self.db_updater.merge_shadow_state(conn=conn)
-        if op_type == "drop_shadow":
-            return self.db_updater.drop_shadow_state(conn=conn)
-        if op_type == "apply_diff":
-            return self.db_updater.apply_diff(
-                entity_id=str(op.get("entity_id", "")),
-                diff=dict(op.get("diff", {})),
-                use_shadow=bool(op.get("use_shadow", False)),
-                conn=conn,
-            )
-        if op_type == "consume_item":
-            return self.db_updater.consume_item(
-                owner_id=str(op.get("owner_id", "")),
-                item_id=str(op.get("item_id", "")),
-                quantity=int(op.get("quantity", 1)),
-                use_shadow=bool(op.get("use_shadow", False)),
-                conn=conn,
-            )
-        if op_type == "advance_turn":
-            return self.db_updater.advance_turn(turns=int(op.get("turns", 1)), conn=conn)
-        return False
+        return execute_write_op_helper(self, op, conn=conn)
 
     def parse_input(self, state: FlowState) -> dict[str, Any]:
         """
@@ -328,107 +295,7 @@ class MainEventLoop:
         出参：dict[str, Any]，包含 is_valid 与 validation_errors。
         异常：数据库只读探针异常向上抛出；校验失败通过 errors 返回，不抛业务异常。
         """
-        action = state.get("action_intent")
-        active_character = state.get("active_character")
-        if not active_character:
-            return self._invalid_result("当前角色不存在，无法执行动作")
-
-        if not action:
-            return self._clarification_result(
-                self._clarify_with_agent(
-                    state,
-                    None,
-                    "我还没有理解你的行动，你想观察、移动、交谈，还是休息？",
-                )
-            )
-
-        if bool(action.get("needs_clarification", False)):
-            question = str(action.get("clarification_question") or "").strip()
-            return self._clarification_result(
-                self._clarify_with_agent(state, action, question or "你能再具体说明目标或方向吗？")
-            )
-
-        errors: list[str] = []
-        action_type = action.get("type")
-        supported_actions = {
-            "attack",
-            "talk",
-            "move",
-            "observe",
-            "wait",
-            "rest",
-            "inspect",
-            "use_item",
-            "interact",
-            "commit_sandbox",
-            "discard_sandbox",
-        }
-        if action_type not in supported_actions:
-            errors.append("动作类型暂不支持")
-
-        if action_type in {"attack", "talk"} and not action.get("target_id"):
-            return self._clarification_result(
-                self._clarify_with_agent(
-                    state,
-                    action,
-                    self._build_target_clarification(state, action_type),
-                )
-            )
-
-        if action_type == "attack":
-            target = self.entity_probes.get_character_stats(str(action["target_id"]))
-            if target is None:
-                errors.append("攻击目标不存在")
-
-        if action_type == "move":
-            location_id = action.get("parameters", {}).get("location_id")
-            if not location_id or location_id == "unknown":
-                return self._clarification_result(
-                    self._clarify_with_agent(state, action, self._build_move_clarification(state))
-                )
-            elif not self._is_reachable_location(state, str(location_id)):
-                errors.append("目标地点不在当前场景出口中")
-
-        if (
-            action_type in {"commit_sandbox", "discard_sandbox"}
-            and not state.get("is_sandbox_mode")
-        ):
-            errors.append("当前不在沙盒模式，无法执行沙盒控制动作")
-
-        if action_type == "use_item":
-            item_id = action.get("parameters", {}).get("item_id")
-            if not item_id:
-                return self._clarification_result(
-                    self._clarify_with_agent(state, action, "你想使用哪个物品？")
-                )
-            else:
-                inventory_item = self.entity_probes.get_inventory_item(
-                    active_character["id"],
-                    str(item_id),
-                    use_shadow=state.get("is_sandbox_mode", False),
-                )
-                if inventory_item is None or int(inventory_item.get("quantity", 0)) <= 0:
-                    errors.append("背包中不存在该物品")
-                elif self.entity_probes.get_item_definition(str(item_id)) is None:
-                    errors.append("该物品缺少可用定义")
-
-        if errors:
-            return self._invalid_result("；".join(errors))
-        return {
-            "is_valid": True,
-            "validation_errors": [],
-            "turn_outcome": "valid_action",
-            "clarification_question": "",
-            "should_advance_turn": True,
-            "should_write_story_memory": True,
-            "debug_trace": [
-                {
-                    "stage": "validate_action",
-                    "status": "valid",
-                    "action_type": str(action_type),
-                }
-            ],
-        }
+        return validate_action_sync_helper(self, state)
 
     def _invalid_result(self, message: str) -> dict[str, Any]:
         """
@@ -437,17 +304,7 @@ class MainEventLoop:
         出参：dict[str, Any]，主循环状态补丁。
         异常：不抛异常；输入按字符串原样记录。
         """
-        return {
-            "is_valid": False,
-            "validation_errors": [message],
-            "turn_outcome": "invalid",
-            "clarification_question": "",
-            "should_advance_turn": False,
-            "should_write_story_memory": False,
-            "failure_reason": message,
-            "suggested_next_step": "观察周围",
-            "debug_trace": [{"stage": "validate_action", "status": "invalid", "message": message}],
-        }
+        return invalid_result_helper(message)
 
     def _clarify_with_agent(
         self,
@@ -462,27 +319,7 @@ class MainEventLoop:
         出参：str，玩家可见澄清问题。
         异常：内部捕获 Clarifier 异常并降级为 fallback_question，避免阻断回合。
         """
-        try:
-            response = self.clarifier_agent.clarify(
-                AgentEnvelope(
-                    trace_id=str(state.get("trace_id", "")),
-                    turn_id=int(state.get("turn_id", 0)),
-                    sender="main_loop",
-                    recipient="clarifier",
-                    kind="clarify.request",
-                    payload={
-                        "user_input": str(state.get("user_input", "")),
-                        "action_intent": action,
-                        "validation_errors": state.get("validation_errors", []),
-                        "scene_snapshot": state.get("scene_snapshot") or {},
-                    },
-                )
-            )
-            question = str(response.payload.get("clarification_question") or "").strip()
-            return question or fallback_question
-        except Exception as error:  # noqa: BLE001
-            logger.warning("Clarifier 生成澄清问题失败，使用兜底问题: %s", error)
-            return fallback_question
+        return clarify_with_agent_helper(self, state, action, fallback_question)
 
     def _clarification_result(self, question: str) -> dict[str, Any]:
         """
@@ -491,19 +328,7 @@ class MainEventLoop:
         出参：dict[str, Any]，主循环状态补丁。
         异常：不抛异常；空问题由调用方提供默认值。
         """
-        return {
-            "is_valid": False,
-            "validation_errors": [],
-            "turn_outcome": "clarification",
-            "clarification_question": question,
-            "should_advance_turn": False,
-            "should_write_story_memory": False,
-            "failure_reason": "行动信息还不够明确。",
-            "suggested_next_step": question,
-            "debug_trace": [
-                {"stage": "validate_action", "status": "clarification", "question": question}
-            ],
-        }
+        return clarification_result_helper(question)
 
     def _build_move_clarification(self, state: FlowState) -> str:
         """
@@ -512,12 +337,7 @@ class MainEventLoop:
         出参：str，面向玩家的问题。
         异常：不抛异常；无出口时返回通用问题。
         """
-        scene_snapshot = state.get("scene_snapshot")
-        exits = scene_snapshot["exits"] if scene_snapshot else []
-        if not exits:
-            return "这里暂时没有明确出口，你想先观察周围吗？"
-        labels = "、".join(exit_info["label"] for exit_info in exits)
-        return f"你想往哪个方向走？当前可选出口：{labels}。"
+        return build_move_clarification_helper(state)
 
     def _build_target_clarification(self, state: FlowState, action_type: Any) -> str:
         """
@@ -526,13 +346,7 @@ class MainEventLoop:
         出参：str，面向玩家的问题。
         异常：不抛异常；无可见对象时返回通用问题。
         """
-        scene_snapshot = state.get("scene_snapshot")
-        npcs = scene_snapshot["visible_npcs"] if scene_snapshot else []
-        verb = "攻击" if action_type == "attack" else "交谈"
-        if not npcs:
-            return f"你想和谁{verb}？当前没有明确可见目标。"
-        labels = "、".join(str(npc.get("name") or npc.get("entity_id")) for npc in npcs)
-        return f"你想{verb}哪个目标？当前可见目标：{labels}。"
+        return build_target_clarification_helper(state, action_type)
 
     def _is_reachable_location(self, state: FlowState, location_id: str) -> bool:
         """
@@ -541,10 +355,7 @@ class MainEventLoop:
         出参：bool，目标在出口列表中返回 True。
         异常：不抛异常；场景快照缺失时保守返回 False。
         """
-        scene_snapshot = state.get("scene_snapshot")
-        if not scene_snapshot:
-            return False
-        return any(exit_info["location_id"] == location_id for exit_info in scene_snapshot["exits"])
+        return is_reachable_location_helper(state, location_id)
 
     async def validate_action(self, state: FlowState) -> dict[str, Any]:
         """
@@ -562,65 +373,7 @@ class MainEventLoop:
         出参：dict[str, Any]，包含 physics_diff，供写计划消费。
         异常：事件总线钩子或只读查询异常向上抛出，由主循环调用方处理。
         """
-        hooked_state = self.event_bus.emit("on_action_pre", dict(state))
-        action = cast(dict[str, Any], hooked_state["action_intent"])
-        action_type = action["type"]
-
-        physics_diff: dict[str, Any] = {}
-        if action_type == "attack":
-            attacker: dict[str, Any] = dict(state.get("active_character") or {})
-            target = self.entity_probes.get_character_stats(str(action["target_id"]))
-            rng = self._build_action_rng(state)
-            attack_rules = self.rules.get("resolution", {}).get("attack", {})
-            attacker_strength = self._to_int(attacker.get("strength", 10), 10)
-            target_agility = self._to_int(target.get("agility", 10), 10) if target else 10
-            attack_roll = roll_d20(modifier=attacker_strength, rng=rng)
-            base_dc = self._to_int(attack_rules.get("base_dc", 10), 10)
-            agility_divisor = max(1, self._to_int(attack_rules.get("agility_divisor", 2), 2))
-            attack_dc = base_dc + target_agility // agility_divisor
-            attack_hit = check_success(attack_roll, attack_dc)
-            physics_diff = {
-                "attack_roll": attack_roll,
-                "attack_dc": attack_dc,
-                "attack_hit": attack_hit,
-            }
-            if attack_hit:
-                damage_dice = str(attack_rules.get("damage_dice", "d6"))
-                damage_roll = roll_dice(damage_dice, rng=rng)[0]
-                strength_divisor = max(
-                    1,
-                    self._to_int(attack_rules.get("strength_damage_divisor", 3), 3),
-                )
-                min_damage = max(1, self._to_int(attack_rules.get("min_damage", 1), 1))
-                damage = max(min_damage, damage_roll + attacker_strength // strength_divisor)
-                physics_diff["damage_roll"] = damage_roll
-                physics_diff["target_hp_delta"] = -damage
-        elif action_type == "move":
-            location_id = action.get("parameters", {}).get("location_id", "unknown")
-            physics_diff = self._resolve_configured_action("move", {"location_id": location_id})
-        elif action_type == "use_item":
-            item_id = action.get("parameters", {}).get("item_id")
-            item_definition = self.entity_probes.get_item_definition(str(item_id))
-            if item_definition:
-                for effect in item_definition.get("effects", []):
-                    if not isinstance(effect, dict):
-                        continue
-                    target_attribute = effect.get("target_attribute")
-                    value = self._to_int(effect.get("value", 0))
-                    if target_attribute == "hp":
-                        physics_diff["hp_delta"] = physics_diff.get("hp_delta", 0) + value
-                    elif target_attribute == "mp":
-                        physics_diff["mp_delta"] = physics_diff.get("mp_delta", 0) + value
-                physics_diff["consumed_item_id"] = str(item_id)
-        elif action_type == "talk":
-            physics_diff = self._resolve_configured_action("talk", {})
-        elif action_type in {"observe", "wait", "rest", "inspect", "interact"}:
-            physics_diff = self._resolve_configured_action(action_type, {})
-        elif action_type in {"commit_sandbox", "discard_sandbox"}:
-            physics_diff = self._resolve_configured_action(action_type, {})
-
-        logger.info("物理结算完成，结果: %s", physics_diff)
-        return {"physics_diff": physics_diff}
+        return resolve_action_sync_helper(self, state)
 
     async def resolve_action(self, state: FlowState) -> dict[str, Any]:
         """
@@ -638,80 +391,7 @@ class MainEventLoop:
         出参：dict[str, Any]。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        write_plan = self._build_write_plan(state)
-        # 事务句柄通过闭包在 begin/execute/commit/rollback 之间共享。
-        txn: dict[str, Any] = {"conn": None}
-
-        def _begin() -> None:
-            """
-            功能：执行 `_begin` 相关业务逻辑。
-            入参：无。
-            出参：None。
-            异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
-            """
-            txn["conn"] = self.db_updater.begin_transaction()
-
-        def _execute(op: dict[str, Any]) -> bool:
-            """
-            功能：执行 `_execute` 相关业务逻辑。
-            入参：op。
-            出参：bool。
-            异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
-            """
-            return self._execute_write_op(op, conn=txn["conn"])
-
-        def _commit() -> None:
-            """
-            功能：执行 `_commit` 相关业务逻辑。
-            入参：无。
-            出参：None。
-            异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
-            """
-            if txn["conn"] is None:
-                return
-            self.db_updater.commit_transaction(txn["conn"])
-            txn["conn"] = None
-
-        def _rollback() -> None:
-            """
-            功能：执行 `_rollback` 相关业务逻辑。
-            入参：无。
-            出参：None。
-            异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
-            """
-            if txn["conn"] is None:
-                return
-            self.db_updater.rollback_transaction(txn["conn"])
-            txn["conn"] = None
-
-        write_result = self.event_bus.apply_write_plan(
-            dict(state),
-            write_plan,
-            _execute,
-            begin=_begin,
-            commit=_commit,
-            rollback=_rollback,
-        )
-        self.event_bus.emit("on_action_post", dict(state))
-        logger.info("数据库更新已提交")
-        # turn_id 以 timeline 真值为准，避免回合号被请求级初始值污染。
-        current_turn = self.db_updater.get_total_turns()
-        action_intent = state.get("action_intent")
-        action_type = action_intent.get("type") if isinstance(action_intent, dict) else None
-        write_results_raw = write_result.get("results", [])
-        write_results = write_results_raw if isinstance(write_results_raw, list) else []
-        if action_type in {"commit_sandbox", "discard_sandbox"}:
-            return {
-                "turn_id": current_turn,
-                "runtime_turn_id": current_turn,
-                "is_sandbox_mode": False,
-                "write_results": write_results,
-            }
-        return {
-            "turn_id": current_turn,
-            "runtime_turn_id": current_turn,
-            "write_results": write_results,
-        }
+        return update_state_sync_helper(self, state)
 
     async def update_state(self, state: FlowState) -> dict[str, Any]:
         """
@@ -772,55 +452,13 @@ class MainEventLoop:
         出参：SceneSnapshot | None，角色缺失时返回 None。
         异常：只读数据库异常向上抛出；地点定义缺失时使用配置降级场景，不中断回合。
         """
-        if active_character is None:
-            return None
-        location_id = active_character.get("location", "unknown")
-        location_info = self.entity_probes.get_location_info(location_id, use_shadow=use_shadow)
-        scene_defaults = self.rules.get("scene_defaults", {})
-        fallback_locations = scene_defaults.get("locations", {})
-        if location_info is None and isinstance(fallback_locations, dict):
-            fallback = (
-                fallback_locations.get(location_id)
-                or fallback_locations.get("unknown")
-                or {}
-            )
-            location_info = dict(fallback) if isinstance(fallback, dict) else {}
-        location_info = location_info or {"id": location_id, "name": location_id, "description": ""}
-
-        exits = self._normalize_scene_exits(location_info.get("exits", []))
-        nearby_entities = self.entity_probes.list_nearby_entities(
-            location_id,
+        return build_scene_snapshot_helper(
+            entity_probes=self.entity_probes,
+            rules=self.rules,
+            active_character=active_character,
+            recent_memory=recent_memory,
             use_shadow=use_shadow,
         )
-        visible_npcs = [
-            entity for entity in nearby_entities
-            if entity.get("entity_id") != active_character["id"]
-        ]
-        available_actions = scene_defaults.get("available_actions", [])
-        suggested_actions = scene_defaults.get("suggested_actions", [])
-        snapshot: dict[str, Any] = {
-            "schema_version": "scene_snapshot.v2",
-            "current_location": {
-                "id": str(location_info.get("id", location_id)),
-                "name": str(location_info.get("name", location_id)),
-                "description": str(location_info.get("description", "")),
-            },
-            "exits": exits,
-            "visible_npcs": visible_npcs,
-            "visible_items": self._normalize_dict_list(location_info.get("visible_items", [])),
-            "active_quests": self._normalize_dict_list(location_info.get("active_quests", [])),
-            "recent_memory": recent_memory,
-            "available_actions": [
-                str(action) for action in available_actions if isinstance(action, str)
-            ],
-            "suggested_actions": [
-                str(action) for action in suggested_actions if isinstance(action, str)
-            ],
-        }
-        # A2 场景可操作化预留：从现有出口/NPC/物品投影对象与交互槽，
-        # A1 仍通过 quick_actions 兜底，避免前端必须一次性切到对象化交互。
-        snapshot.update(build_scene_interaction_model(snapshot))
-        return cast(SceneSnapshot, snapshot)
 
     def _normalize_scene_exits(self, raw_exits: Any) -> list[SceneExitState]:
         """
@@ -829,29 +467,7 @@ class MainEventLoop:
         出参：list[dict[str, Any]]，每项包含 direction、location_id、label、aliases。
         异常：不抛异常；非法项会被跳过。
         """
-        if not isinstance(raw_exits, list):
-            return []
-        exits: list[SceneExitState] = []
-        for raw_exit in raw_exits:
-            if not isinstance(raw_exit, dict):
-                continue
-            location_id = raw_exit.get("location_id")
-            if not isinstance(location_id, str) or not location_id:
-                continue
-            aliases = raw_exit.get("aliases", [])
-            exits.append(
-                {
-                    "direction": str(raw_exit.get("direction", "")),
-                    "location_id": location_id,
-                    "label": str(raw_exit.get("label", location_id)),
-                    "aliases": (
-                        [str(alias) for alias in aliases if isinstance(alias, str)]
-                        if isinstance(aliases, list)
-                        else []
-                    ),
-                }
-            )
-        return exits
+        return normalize_scene_exits_helper(raw_exits)
 
     def _normalize_dict_list(self, value: Any) -> list[dict[str, Any]]:
         """
@@ -860,9 +476,7 @@ class MainEventLoop:
         出参：list[dict[str, Any]]，仅保留 dict 项。
         异常：不抛异常；非列表输入返回空列表。
         """
-        if not isinstance(value, list):
-            return []
-        return [dict(item) for item in value if isinstance(item, dict)]
+        return normalize_dict_list_helper(value)
 
     async def _emit_outer_events(self, state: FlowState) -> dict[str, Any]:
         """
@@ -871,86 +485,7 @@ class MainEventLoop:
         出参：dict[str, Any]，包含 status/detail，用于 trace 写入真实投递语义。
         异常：内部捕获所有投递异常并降级入 outbox，不向上抛出以免阻断内环。
         """
-        failed_events: list[dict[str, str]] = []
-        if state.get("is_valid") and state.get("physics_diff"):
-            try:
-                await asyncio.wait_for(
-                    self.outer_bridge.emit_state_changed(
-                        StateChangedEvent(
-                            entity_id=str(state.get("active_character_id", "")),
-                            diff=dict(state.get("physics_diff") or {}),
-                            is_sandbox=bool(state.get("is_sandbox_mode", False)),
-                        )
-                    ),
-                    timeout=self.outer_emit_timeout_seconds,
-                )
-            except Exception as error:  # noqa: BLE001
-                logger.warning("外环事件投递失败[event=state_changed]，已降级忽略: %s", error)
-                failed_events.append({"event": "state_changed", "error": str(error)})
-                self.db_updater.enqueue_outer_event(
-                    "state_changed",
-                    StateChangedEvent(
-                        entity_id=str(state.get("active_character_id", "")),
-                        diff=dict(state.get("physics_diff") or {}),
-                        is_sandbox=bool(state.get("is_sandbox_mode", False)),
-                    ).model_dump(),
-                    str(error),
-                )
-
-        try:
-            await asyncio.wait_for(
-                self.outer_bridge.emit_turn_ended(
-                    TurnEndedEvent(
-                        turn_id=int(state.get("turn_id", 0)),
-                        user_input=str(state.get("user_input", "")),
-                        final_response=str(state.get("final_response", "")),
-                    )
-                ),
-                timeout=self.outer_emit_timeout_seconds,
-            )
-        except Exception as error:  # noqa: BLE001
-            logger.warning("外环事件投递失败[event=turn_ended]，已降级忽略: %s", error)
-            failed_events.append({"event": "turn_ended", "error": str(error)})
-            self.db_updater.enqueue_outer_event(
-                "turn_ended",
-                TurnEndedEvent(
-                    turn_id=int(state.get("turn_id", 0)),
-                    user_input=str(state.get("user_input", "")),
-                    final_response=str(state.get("final_response", "")),
-                ).model_dump(),
-                str(error),
-            )
-
-        if self.outer_emit_world_evolution and state.get("should_advance_turn", True):
-            active_character: dict[str, Any] = dict(state.get("active_character") or {})
-            try:
-                await asyncio.wait_for(
-                    self.outer_bridge.emit_world_evolution(
-                        WorldEvolutionEvent(
-                            time_passed_minutes=self.outer_world_minutes_per_turn,
-                            location_id=str(active_character.get("location", "unknown")),
-                        )
-                    ),
-                    timeout=self.outer_emit_timeout_seconds,
-                )
-            except Exception as error:  # noqa: BLE001
-                logger.warning("外环事件投递失败[event=world_evolution]，已降级忽略: %s", error)
-                failed_events.append({"event": "world_evolution", "error": str(error)})
-                self.db_updater.enqueue_outer_event(
-                    "world_evolution",
-                    WorldEvolutionEvent(
-                        time_passed_minutes=self.outer_world_minutes_per_turn,
-                        location_id=str(active_character.get("location", "unknown")),
-                    ).model_dump(),
-                        str(error),
-                    )
-
-        if failed_events:
-            return {
-                "status": "failed",
-                "detail": {"mode": "sync", "failed_events": failed_events},
-            }
-        return {"status": "ok", "detail": {"mode": "sync"}}
+        return await emit_outer_events(self, state)
 
     def _emit_outer_events_background(self, state: FlowState) -> dict[str, Any]:
         """
@@ -959,81 +494,7 @@ class MainEventLoop:
         出参：dict[str, Any]，包含 status/detail，用于标记 started/skipped/failed。
         异常：内部仅记录并降级，不向上抛出。
         """
-        if len(self._outer_emit_tasks) >= self.outer_max_pending_tasks:
-            logger.warning(
-                "外环后台任务达到上限，当前回合事件写入补偿队列: pending=%s",
-                len(self._outer_emit_tasks),
-            )
-            # 溢出降级时只写入“可重放事件类型”，避免补偿队列出现不可消费事件。
-            if state.get("is_valid") and state.get("physics_diff"):
-                self.db_updater.enqueue_outer_event(
-                    "state_changed",
-                    StateChangedEvent(
-                        entity_id=str(state.get("active_character_id", "")),
-                        diff=dict(state.get("physics_diff") or {}),
-                        is_sandbox=bool(state.get("is_sandbox_mode", False)),
-                    ).model_dump(),
-                    "pending tasks overflow",
-                )
-            self.db_updater.enqueue_outer_event(
-                "turn_ended",
-                TurnEndedEvent(
-                    turn_id=int(state.get("turn_id", 0)),
-                    user_input=str(state.get("user_input", "")),
-                    final_response=str(state.get("final_response", "")),
-                ).model_dump(),
-                "pending tasks overflow",
-            )
-            if self.outer_emit_world_evolution:
-                active_character: dict[str, Any] = dict(state.get("active_character") or {})
-                self.db_updater.enqueue_outer_event(
-                    "world_evolution",
-                    WorldEvolutionEvent(
-                        time_passed_minutes=self.outer_world_minutes_per_turn,
-                        location_id=str(active_character.get("location", "unknown")),
-                    ).model_dump(),
-                    "pending tasks overflow",
-                )
-            logger.warning(
-                "外环事件已拆分入补偿队列: actor=%s turn=%s",
-                str(state.get("active_character_id", "")),
-                int(state.get("turn_id", 0)),
-            )
-            return {
-                "status": "failed",
-                "detail": {
-                    "mode": "workflow_background",
-                    "reason": "pending tasks overflow",
-                    "queued_to_outbox": True,
-                },
-            }
-        task = asyncio.create_task(self._emit_outer_events(state))
-        self._outer_emit_tasks.add(task)
-
-        def _on_done(done_task: asyncio.Task[Any]) -> None:
-            """
-            功能：执行 `_on_done` 相关业务逻辑。
-            入参：done_task。
-            出参：None。
-            异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
-            """
-            self._outer_emit_tasks.discard(done_task)
-            if done_task.cancelled():
-                logger.warning("外环事件投递后台任务被取消。")
-                return
-            error = done_task.exception()
-            if error is not None:
-                logger.warning("外环事件投递后台任务失败: %s", error)
-
-        task.add_done_callback(_on_done)
-        return {
-            "status": "started",
-            "detail": {
-                "mode": "workflow_background",
-                "task_created": True,
-                "pending_tasks": len(self._outer_emit_tasks),
-            },
-        }
+        return emit_outer_events_background(self, state)
 
     async def _replay_outbox_once(self) -> None:
         """
@@ -1042,47 +503,7 @@ class MainEventLoop:
         出参：None。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        rows = self.db_updater.reserve_pending_outer_events(
-            limit=self.outer_outbox_replay_limit,
-            processing_timeout_seconds=self.outer_outbox_processing_timeout_seconds,
-        )
-        for row in rows:
-            event_id = self._to_int(row.get("id", 0), 0)
-            event_name = str(row.get("event_name", ""))
-            payload_raw = row.get("payload", {})
-            payload = cast(dict[str, Any], payload_raw) if isinstance(payload_raw, dict) else {}
-            try:
-                if event_name == "state_changed":
-                    await asyncio.wait_for(
-                        self.outer_bridge.emit_state_changed(StateChangedEvent(**payload)),
-                        timeout=self.outer_emit_timeout_seconds,
-                    )
-                elif event_name == "turn_ended":
-                    await asyncio.wait_for(
-                        self.outer_bridge.emit_turn_ended(TurnEndedEvent(**payload)),
-                        timeout=self.outer_emit_timeout_seconds,
-                    )
-                elif event_name == "world_evolution":
-                    await asyncio.wait_for(
-                        self.outer_bridge.emit_world_evolution(WorldEvolutionEvent(**payload)),
-                        timeout=self.outer_emit_timeout_seconds,
-                    )
-                else:
-                    raise ValueError(f"unsupported outbox event: {event_name}")
-                self.db_updater.mark_outer_event_delivered(event_id)
-            except Exception as error:  # noqa: BLE001
-                self.db_updater.mark_outer_event_failed(
-                    event_id=event_id,
-                    error=str(error),
-                    max_attempts=self.outer_outbox_max_attempts,
-                    base_backoff_seconds=self.outer_outbox_backoff_seconds,
-                )
-                logger.warning(
-                    "外环补偿重放失败[event=%s id=%s]，已回写重试状态: %s",
-                    event_name,
-                    event_id,
-                    error,
-                )
+        await replay_outbox_once(self)
 
     def _schedule_outbox_replay(self) -> None:
         """
@@ -1091,29 +512,7 @@ class MainEventLoop:
         出参：None。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        now = time.monotonic()
-        if now - self._last_outbox_replay_ts < self.outer_outbox_replay_interval_seconds:
-            return
-        if self._outer_replay_task is not None and not self._outer_replay_task.done():
-            return
-        self._last_outbox_replay_ts = now
-        self._outer_replay_task = asyncio.create_task(self._replay_outbox_once())
-
-        def _on_done(done_task: asyncio.Task[Any]) -> None:
-            """
-            功能：执行 `_on_done` 相关业务逻辑。
-            入参：done_task。
-            出参：None。
-            异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
-            """
-            if done_task.cancelled():
-                logger.warning("外环补偿重放任务被取消。")
-                return
-            error = done_task.exception()
-            if error is not None:
-                logger.warning("外环补偿重放任务失败: %s", error)
-
-        self._outer_replay_task.add_done_callback(_on_done)
+        schedule_outbox_replay(self)
 
     def _build_character_state(
         self,
@@ -1126,21 +525,7 @@ class MainEventLoop:
         出参：CharacterState | None。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        snapshot = self.entity_probes.get_character_stats(entity_id, use_shadow=use_shadow)
-        if snapshot is None:
-            return None
-
-        inventory_rows = self.entity_probes.check_inventory(entity_id, use_shadow=use_shadow)
-        return {
-            "id": snapshot["entity_id"],
-            "name": snapshot["name"],
-            "hp": snapshot["hp"],
-            "max_hp": snapshot["max_hp"],
-            "mp": snapshot["mp"],
-            "max_mp": snapshot["max_mp"],
-            "inventory": [row["item_id"] for row in inventory_rows],
-            "location": snapshot.get("current_location_id") or "unknown",
-        }
+        return build_character_state_helper(self.entity_probes, entity_id, use_shadow)
 
     async def run(
         self,

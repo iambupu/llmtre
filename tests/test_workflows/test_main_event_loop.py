@@ -3,8 +3,13 @@ import json
 import sqlite3
 
 from core.event_bus import EventBus
-from game_workflows.async_watchers import OuterLoopBridge, WorkflowOuterLoopBridge
+from game_workflows.async_watchers import (
+    NoOpOuterLoopBridge,
+    OuterLoopBridge,
+    WorkflowOuterLoopBridge,
+)
 from game_workflows.main_event_loop import MainEventLoop
+from state.contracts.turn import TurnRequestContext
 from state.tools.db_initializer import DBInitializer
 from tools.entity.entity_probes import EntityProbes
 from tools.sqlite_db.db_updater import DBUpdater
@@ -188,6 +193,54 @@ def test_main_event_loop_returns_controlled_failure_for_unknown_input(tmp_path):
     assert result["final_response"]
 
 
+def test_main_event_loop_noop_outer_bridge_reports_skipped(tmp_path):
+    """
+    功能：验证 NoOp 外环桥接器会在回合结果中明确标记 skipped/noop，便于 service trace 映射。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示 noop 外环结果契约回归。
+    """
+    loop = build_loop_with_outer(tmp_path, NoOpOuterLoopBridge())
+
+    result = asyncio.run(loop.run("观察周围"))
+
+    assert result["outer_emit_result"] == {"status": "skipped", "detail": {"mode": "noop"}}
+
+
+def test_main_event_loop_request_context_overrides_runtime_inputs(tmp_path):
+    """
+    功能：验证 request_context 会覆盖角色、沙盒和会话记忆，保证 API 层追踪字段进入主循环。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示请求级上下文桥接回归。
+    """
+    loop = build_loop(tmp_path)
+    context = TurnRequestContext(
+        trace_id="trc_ctx_001",
+        request_id="req_ctx_001",
+        session_id="sess_ctx_001",
+        character_id="player_01",
+        sandbox_mode=False,
+        recent_memory="上一回合摘要",
+    )
+
+    result = asyncio.run(
+        loop.run(
+            "观察周围",
+            initial_character_id="ignored_character",
+            is_sandbox_mode=True,
+            recent_memory="ignored memory",
+            request_context=context,
+        )
+    )
+
+    assert result["trace_id"] == "trc_ctx_001"
+    assert result["request_id"] == "req_ctx_001"
+    assert result["session_id"] == "sess_ctx_001"
+    assert result["active_character_id"] == "player_01"
+    assert result["scene_snapshot"]["recent_memory"] == "上一回合摘要"
+
+
 def test_main_event_loop_emits_minimal_outer_events(tmp_path):
     outer = CollectingOuterBridge()
     loop = build_loop_with_outer(tmp_path, outer)
@@ -338,6 +391,44 @@ def test_main_event_loop_talk_without_target_returns_clarification(tmp_path):
     assert result["turn_id"] == 0
 
 
+def test_main_event_loop_clarification_builders_use_fallbacks_without_scene(tmp_path):
+    """
+    功能：验证移动/目标澄清在缺少 scene_snapshot 时使用确定性兜底文本。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示 clarification 边界文案回归。
+    """
+    loop = build_loop(tmp_path)
+
+    move_question = loop._build_move_clarification({})  # noqa: SLF001
+    target_question = loop._build_target_clarification({}, "attack")  # noqa: SLF001
+
+    assert move_question == "这里暂时没有明确出口，你想先观察周围吗？"
+    assert target_question == "你想和谁攻击？当前没有明确可见目标。"
+
+
+def test_main_event_loop_clarifier_failure_uses_fallback_question(tmp_path):
+    """
+    功能：验证 Clarifier 异常时主循环会使用确定性兜底问题，避免澄清回合失败。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示 `_clarify_with_agent` 降级路径回归。
+    """
+    loop = build_loop(tmp_path)
+
+    def _raise_clarifier_error(_envelope):
+        raise RuntimeError("clarifier unavailable")
+
+    loop.clarifier_agent.clarify = _raise_clarifier_error
+    result = asyncio.run(loop.run("天气真不错"))
+
+    assert result["is_valid"] is False
+    assert result["turn_outcome"] == "clarification"
+    expected_question = "我还没有理解你的行动，你想观察、移动、交谈，还是休息？"
+    assert result["clarification_question"] == expected_question
+    assert result["should_advance_turn"] is False
+
+
 def test_main_event_loop_interact_updates_mp_and_flag(tmp_path):
     loop = build_loop(tmp_path)
 
@@ -473,6 +564,47 @@ def test_main_event_loop_use_item_fails_when_inventory_missing_item(tmp_path):
     assert result["final_response"]
 
 
+def test_main_event_loop_config_and_write_plan_edge_branches(tmp_path):
+    """
+    功能：验证配置动作过滤非法 flag、整数转换降级、写计划消费物品/目标伤害与未知写操作分支。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示确定性结算或写计划边界回归。
+    """
+    loop = build_loop(tmp_path)
+    loop.rules.setdefault("resolution", {})["inspect"] = {
+        "hp_delta": 0,
+        "mp_delta": 0,
+        "state_flags_add": ["valid_flag", 123, None],
+    }
+
+    configured = loop._resolve_configured_action("inspect", {"base": True})  # noqa: SLF001
+    write_plan = loop._build_write_plan(  # noqa: SLF001
+        {
+            "active_character_id": "player_01",
+            "action_intent": {"type": "attack", "target_id": "goblin_01"},
+            "physics_diff": {"consumed_item_id": "potion", "target_hp_delta": -3},
+            "is_sandbox_mode": False,
+        }
+    )
+
+    assert loop._to_int("bad", default=7) == 7  # noqa: SLF001
+    assert configured["state_flags_add"] == ["valid_flag"]
+    assert {
+        "type": "consume_item",
+        "owner_id": "player_01",
+        "item_id": "potion",
+        "use_shadow": False,
+    } in write_plan
+    assert {
+        "type": "apply_diff",
+        "entity_id": "goblin_01",
+        "diff": {"hp_delta": -3},
+        "use_shadow": False,
+    } in write_plan
+    assert loop._execute_write_op({"type": "unknown"}) is False  # noqa: SLF001
+
+
 def test_main_event_loop_returns_controlled_failure_for_missing_character(tmp_path):
     loop = build_loop(tmp_path)
 
@@ -482,3 +614,133 @@ def test_main_event_loop_returns_controlled_failure_for_missing_character(tmp_pa
     assert "当前角色不存在" in "；".join(result["validation_errors"])
     assert result["action_intent"] is None
     assert result["final_response"]
+
+
+def test_main_event_loop_background_emit_overflow_enqueues_outbox_events(tmp_path):
+    """
+    功能：验证后台外环投递达到上限时会降级写入 outbox，且只写入可重放事件类型。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示后台溢出降级路径回归。
+    """
+    loop = build_loop(tmp_path)
+    loop.outer_max_pending_tasks = 0
+    state = {
+        "is_valid": True,
+        "physics_diff": {"hp_delta": 1},
+        "active_character_id": "player_01",
+        "is_sandbox_mode": False,
+        "turn_id": 7,
+        "user_input": "观察周围",
+        "final_response": "叙事",
+        "active_character": {"location": "unknown"},
+    }
+
+    result = loop._emit_outer_events_background(state)  # noqa: SLF001
+    pending = loop.db_updater.list_pending_outer_events(limit=10)
+    event_names = {str(item["event_name"]) for item in pending}
+    assert result["status"] == "failed"
+    assert result["detail"]["queued_to_outbox"] is True
+    assert event_names == {"state_changed", "turn_ended", "world_evolution"}
+
+
+def test_main_event_loop_background_emit_starts_async_task(tmp_path):
+    """
+    功能：验证后台外环投递在容量充足时会创建任务并返回 started 状态。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示后台任务调度分支回归。
+    """
+    outer = CollectingOuterBridge()
+    loop = build_loop_with_outer(tmp_path, outer)
+    state = {
+        "is_valid": True,
+        "physics_diff": {"hp_delta": 1},
+        "active_character_id": "player_01",
+        "is_sandbox_mode": False,
+        "turn_id": 8,
+        "user_input": "观察周围",
+        "final_response": "叙事",
+        "should_advance_turn": True,
+        "active_character": {"location": "unknown"},
+    }
+
+    async def _run_once() -> dict[str, object]:
+        result = loop._emit_outer_events_background(state)  # noqa: SLF001
+        await asyncio.sleep(0.05)
+        return result
+
+    result = asyncio.run(_run_once())
+    assert result["status"] == "started"
+    assert result["detail"]["mode"] == "workflow_background"
+
+
+def test_main_event_loop_replay_outbox_unsupported_event_logs_failure(tmp_path, caplog):
+    """
+    功能：验证补偿重放遇到不支持事件类型时会回写失败状态并输出告警日志。
+    入参：tmp_path（pytest fixture）；caplog（日志捕获器）。
+    出参：None。
+    异常：断言失败表示 outbox 失败回写路径不可观测。
+    """
+    loop = build_loop(tmp_path)
+    loop.db_updater.enqueue_outer_event("unsupported_event", {"foo": "bar"}, "seed")
+
+    async def _replay_once() -> None:
+        await loop._replay_outbox_once()  # noqa: SLF001
+
+    caplog.set_level("WARNING", logger="Workflow.MainLoop")
+    asyncio.run(_replay_once())
+    assert "外环补偿重放失败[event=unsupported_event" in caplog.text
+
+
+def test_main_event_loop_replay_outbox_delivers_supported_events(tmp_path):
+    """
+    功能：验证补偿重放能投递三类支持事件，并标记 delivered。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示 outbox 成功重放或 delivered 标记回归。
+    """
+    outer = CollectingOuterBridge()
+    loop = build_loop_with_outer(tmp_path, outer)
+    loop.db_updater.enqueue_outer_event(
+        "state_changed",
+        {"entity_id": "player_01", "diff": {"hp_delta": 1}, "is_sandbox": False},
+        "seed",
+    )
+    loop.db_updater.enqueue_outer_event(
+        "turn_ended",
+        {"turn_id": 1, "user_input": "观察", "final_response": "叙事"},
+        "seed",
+    )
+    loop.db_updater.enqueue_outer_event(
+        "world_evolution",
+        {"time_passed_minutes": 10, "location_id": "unknown"},
+        "seed",
+    )
+
+    asyncio.run(loop._replay_outbox_once())  # noqa: SLF001
+
+    assert len(outer.state_events) == 1
+    assert len(outer.turn_events) == 1
+    assert len(outer.world_events) == 1
+    assert loop.db_updater.list_pending_outer_events(limit=10) == []
+
+
+def test_main_event_loop_schedule_outbox_replay_respects_interval_and_active_task(tmp_path):
+    """
+    功能：验证 outbox 调度会遵守间隔和进行中任务限制，避免重复创建补偿任务。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示 outbox 调度节流回归。
+    """
+    loop = build_loop(tmp_path)
+
+    async def _schedule_twice() -> None:
+        loop._schedule_outbox_replay()  # noqa: SLF001
+        first_task = loop._outer_replay_task
+        loop._schedule_outbox_replay()  # noqa: SLF001
+        assert loop._outer_replay_task is first_task
+        assert first_task is not None
+        await first_task
+
+    asyncio.run(_schedule_twice())

@@ -159,21 +159,29 @@ class RAGManager:
 
     def query_lore(self, query: str) -> str:
         """
-        功能：执行 `query_lore` 相关业务逻辑。
-        入参：query。
-        出参：str。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        功能：执行普通 RAG 检索。
+        入参：query（str）：玩家或系统查询文本。
+        出参：str，检索成功返回上下文文本，失败返回稳定错误文案。
+        异常：底层 retriever 异常会被捕获并记录日志，避免外观层调用方被 RAG 故障打断。
         """
-        return self.retriever.query(query)
+        try:
+            return self.retriever.query(query)
+        except Exception as error:  # noqa: BLE001
+            logger.exception("RAG 查询失败，已降级返回错误文案: query=%s", query)
+            return f"检索失败：{error}"
 
     def query_lore_readonly(self, query: str) -> str:
         """
-        功能：执行 `query_lore_readonly` 相关业务逻辑。
-        入参：query。
-        出参：str。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        功能：执行只读 RAG 检索。
+        入参：query（str）：玩家或系统查询文本。
+        出参：str，检索成功返回上下文文本，失败返回稳定错误文案。
+        异常：底层 retriever 异常会被捕获并记录日志，避免主循环只读上下文构建失败。
         """
-        return self.retriever.query_readonly(query)
+        try:
+            return self.retriever.query_readonly(query)
+        except Exception as error:  # noqa: BLE001
+            logger.exception("RAG 只读查询失败，已降级返回错误文案: query=%s", query)
+            return f"检索失败：{error}"
 
 if __name__ == "__main__":
     manager = RAGManager(probe_on_init=True)

@@ -71,7 +71,11 @@ class ClarifierAgent:
                 if labels else f"你想{verb}谁？当前没有明确可见目标。"
             )
         if action_type == "use_item":
-            return "你想使用哪个物品？"
+            item_labels = self._enabled_affordance_labels(scene, "use_item")
+            return (
+                f"你想使用哪个物品？当前可用物品：{'、'.join(item_labels)}。"
+                if item_labels else "你想使用哪个物品？"
+            )
         if action_type in {"inspect", "interact"}:
             labels = self._labels(scene.get("scene_objects"), "label", "object_id")
             return (
@@ -134,5 +138,27 @@ class ClarifierAgent:
                 continue
             label = str(item.get(primary_key) or item.get(fallback_key) or "").strip()
             if label:
+                labels.append(label)
+        return labels
+
+    def _enabled_affordance_labels(self, scene: dict[str, Any], action_type: str) -> list[str]:
+        """
+        功能：从 enabled affordance 中提取指定动作类型的可展示候选，供缺参澄清使用。
+        入参：scene（dict[str, Any]）：场景快照；action_type（str）：目标标准动作族。
+        出参：list[str]，按场景 affordance 顺序返回去重后的标签或输入文本。
+        异常：不抛异常；affordances 缺失或结构非法时返回空列表作为降级路径。
+        """
+        raw_affordances = scene.get("affordances", [])
+        if not isinstance(raw_affordances, list):
+            return []
+        labels: list[str] = []
+        for item in raw_affordances:
+            if not isinstance(item, dict):
+                continue
+            # 只信任确定性生成且当前可执行的候选，避免把 disabled 动作误推荐给玩家。
+            if str(item.get("action_type") or "") != action_type or not bool(item.get("enabled")):
+                continue
+            label = str(item.get("label") or item.get("user_input") or "").strip()
+            if label and label not in labels:
                 labels.append(label)
         return labels

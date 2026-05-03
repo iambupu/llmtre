@@ -104,14 +104,23 @@ class ModManager:
 
     def _load_registry(self) -> dict[str, Any]:
         """
-        功能：执行 `_load_registry` 相关业务逻辑。
+        功能：加载 MOD 注册表；缺失、空文件、损坏或类型非法时返回空注册表模板。
         入参：无。
         出参：Dict[str, Any]。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        异常：YAML 解析或读取失败时内部捕获并记录错误日志，降级为空注册表。
         """
         if os.path.exists(REGISTRY_PATH):
-            with open(REGISTRY_PATH, encoding="utf-8") as f:
-                return yaml.safe_load(f) or self._get_empty_registry()
+            try:
+                with open(REGISTRY_PATH, encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+            except Exception as exc:
+                logger.error(f"加载 MOD 注册表失败，已使用空注册表: {exc}")
+                return self._get_empty_registry()
+            if isinstance(loaded, dict):
+                return loaded or self._get_empty_registry()
+            # 注册表是人工可编辑文件，类型错误时按空模板自愈，避免阻断全量扫描。
+            logger.error("加载 MOD 注册表失败，内容不是 YAML 对象，已使用空注册表。")
+            return self._get_empty_registry()
         return self._get_empty_registry()
 
     def _save_registry(self, registry: dict[str, Any]) -> None:

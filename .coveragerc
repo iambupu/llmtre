@@ -1,0 +1,24 @@
+[run]
+branch = True
+source =
+    agents
+    game_workflows
+    web_api
+    state
+    tools
+omit =
+    tests/*
+    static/*
+    templates/*
+    */__pycache__/*
+    */.venv/*
+    */.venv-wsl/*
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 2
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
