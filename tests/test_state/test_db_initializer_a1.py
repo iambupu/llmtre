@@ -258,3 +258,35 @@ def test_db_initializer_script_runs_from_project_root() -> None:
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_is_db_initialized_checks_required_schema_and_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能：验证 is_db_initialized 会校验核心表与关键种子，避免“仅文件存在”的假阳性。
+    入参：tmp_path；monkeypatch。
+    出参：None。
+    异常：断言失败表示初始化完整性探测回归。
+    """
+    data_dir, _, _ = _patch_initializer_paths(tmp_path, monkeypatch)
+    _write_json(data_dir / "items.json", [_item_payload("item_01", "Base Potion")])
+    _write_json(data_dir / "entities.json", [_entity_payload(["item_01"])])
+
+    db_path = tmp_path / "state" / "core_data" / "integrity.db"
+    initializer = DBInitializer(str(db_path))
+
+    assert initializer.is_db_initialized() is False
+
+    with sqlite3.connect(db_path):
+        pass
+    assert initializer.is_db_initialized() is False
+
+    initializer.initialize_db()
+    assert initializer.is_db_initialized() is True
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM entities_active WHERE entity_id = 'player_01'")
+        conn.commit()
+    assert initializer.is_db_initialized() is False

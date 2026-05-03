@@ -57,6 +57,29 @@ def reset_session(session_id: str) -> tuple[Any, int]:
                 request_id,
             )
             return success(existing)
+        fresh_session = get_session(session_id)
+        if fresh_session is None:
+            return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
+        if context.main_loop is None:
+            return error("INTERNAL_ERROR", "主循环未初始化", 500)
+        db_updater = context.main_loop.db_updater
+        # 会话处于沙盒模式时，reset 必须由租约 owner 执行，防止误删其他会话沙盒。
+        if bool(fresh_session.get("sandbox_mode", False)):
+            if not db_updater.is_sandbox_owner(session_id=session_id):
+                return error(
+                    "SANDBOX_OWNER_MISMATCH",
+                    "当前会话未持有沙盒租约，无法重置沙盒状态",
+                    409,
+                )
+            conn = db_updater.begin_transaction()
+            try:
+                if not db_updater.drop_shadow_state(conn=conn, session_id=session_id):
+                    db_updater.rollback_transaction(conn)
+                    return error("SANDBOX_STATE_INVALID", "沙盒快照清理失败", 409)
+                db_updater.commit_transaction(conn)
+            except Exception:
+                db_updater.rollback_transaction(conn)
+                raise
         ok = context.session_store.clear_session_turns_and_reset(
             session_id=session_id,
             keep_character=keep_character,

@@ -474,6 +474,31 @@ def test_create_turn_updates_memory_policy_before_persist(turns_client) -> None:
     assert session["memory_policy"]["max_turns"] == 5
 
 
+def test_create_turn_stream_updates_memory_policy_before_persist(turns_client) -> None:
+    """
+    功能：验证 SSE 回合复用普通回合 memory 策略解析，并在持久化前写入会话。
+    入参：turns_client。
+    出参：None。
+    异常：断言失败表示 create_turn_stream 与 create_turn 的 memory 行为不一致。
+    """
+    response = turns_client.post(
+        "/api/sessions/sess_a1demo01/turns/stream",
+        json={
+            "request_id": "req_memory_policy_sse01",
+            "user_input": "观察",
+            "memory": {"mode": "auto", "max_turns": 5},
+        },
+    )
+    raw_text = response.data.decode("utf-8")
+    session = turns_client.application.extensions["tre_api_context"].session_store.get_session(  # type: ignore[attr-defined]
+        "sess_a1demo01"
+    )
+
+    assert response.status_code == 200
+    assert "event: done" in raw_text
+    assert session["memory_policy"]["max_turns"] == 5
+
+
 def test_create_turn_stream_error_keeps_run_turn_trace_id(
     turns_client,
     monkeypatch: pytest.MonkeyPatch,

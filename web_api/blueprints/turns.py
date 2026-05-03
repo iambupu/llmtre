@@ -283,6 +283,40 @@ def _resolve_memory_policy(
     return {"mode": "auto", "max_turns": max_turns}
 
 
+def _refresh_session_and_apply_memory_policy(
+    context: Any,
+    session_id: str,
+    body: dict[str, Any],
+    character_id: str,
+) -> tuple[dict[str, Any] | None, tuple[Any, int] | None]:
+    """
+    功能：在会话锁内刷新会话快照，并统一解析/写入本次请求的 memory 策略。
+    入参：context（Any）：API 运行时上下文，需提供 session_store；session_id（str）：会话 ID；
+        body（dict[str, Any]）：已解析请求体，memory 配置来源；
+        character_id（str）：已通过前置校验的角色 ID。
+    出参：tuple[dict[str, Any] | None, tuple[Any, int] | None]；成功返回最新 session 与 None，
+        失败返回 None 与可直接返回或转 SSE error 的错误响应。
+    异常：底层会话读取或策略写入的 SQL 异常不在此捕获，由调用方按普通/SSE 链路降级。
+    """
+    # 事务边界：调用方已持有 session_lock，避免普通与 SSE 并发回合写出不同 memory_policy。
+    fresh_session = get_session(session_id)
+    if fresh_session is None:
+        return None, error("SESSION_NOT_FOUND", "session_id 不存在", 404)
+    if character_id != fresh_session["character_id"]:
+        return None, error("TURN_CONFLICT", "character_id 与会话绑定不一致", 409)
+    memory_policy = _resolve_memory_policy(body, fresh_session)
+    if isinstance(memory_policy, tuple):
+        return None, memory_policy
+    if memory_policy != fresh_session["memory_policy"]:
+        context.session_store.update_memory_policy(
+            session_id=session_id,
+            memory_policy=memory_policy,
+            now_iso=now_iso(),
+        )
+        fresh_session["memory_policy"] = memory_policy
+    return fresh_session, None
+
+
 def _build_memory_summary_if_needed(
     context: Any,
     session_id: str,
@@ -320,6 +354,46 @@ def _build_memory_summary_if_needed(
     return memory_summary
 
 
+def _ensure_sandbox_lock_preconditions(
+    context: Any,
+    session: dict[str, Any],
+    sandbox_mode: bool,
+) -> tuple[dict[str, Any], tuple[Any, int] | None, bool]:
+    """
+    功能：校验并准备沙盒租约，确保全局仅允许单会话进入沙盒写路径。
+    入参：context（Any）：运行时上下文；session（dict[str, Any]）：会话快照；
+        sandbox_mode（bool）：本次请求是否声明使用沙盒。
+    出参：tuple[dict[str, Any], tuple[Any, int] | None, bool]，依次为最新会话快照、
+        错误响应（通过时为 None）、以及是否在本次请求中完成租约抢占。
+    异常：函数内部不抛业务异常；底层 DB 异常交由上层统一异常处理。
+    """
+    fresh_session = get_session(session["session_id"])
+    if fresh_session is None:
+        return session, error("SESSION_NOT_FOUND", "session_id 不存在", 404), False
+    if not sandbox_mode:
+        return fresh_session, None, False
+    if context.main_loop is None:
+        return fresh_session, error("INTERNAL_ERROR", "主循环未初始化", 500), False
+    db_updater = context.main_loop.db_updater
+    acquired_now = False
+    if bool(fresh_session.get("sandbox_mode", False)):
+        if not db_updater.is_sandbox_owner(fresh_session["session_id"]):
+            return (
+                fresh_session,
+                error("SANDBOX_OWNER_MISMATCH", "当前会话未持有沙盒租约", 409),
+                False,
+            )
+    else:
+        if not db_updater.acquire_sandbox_lock(fresh_session["session_id"]):
+            return (
+                fresh_session,
+                error("SANDBOX_BUSY", "已有其他会话占用沙盒，请稍后重试", 409),
+                False,
+            )
+        acquired_now = True
+    return fresh_session, None, acquired_now
+
+
 @turns_blueprint.post("")
 def create_turn(session_id: str) -> tuple[Any, int]:
     """
@@ -333,13 +407,20 @@ def create_turn(session_id: str) -> tuple[Any, int]:
     if len(parsed) == 1:
         return parsed[0]
     session, body, request_id, user_input, character_id, sandbox_mode = parsed
-    memory_policy = _resolve_memory_policy(body, session)
-    if isinstance(memory_policy, tuple):
-        return memory_policy
 
     context = get_runtime_context()
     session_lock = context.get_session_lock(session_id)
     with session_lock:
+        session, policy_error = _refresh_session_and_apply_memory_policy(
+            context=context,
+            session_id=session_id,
+            body=body,
+            character_id=character_id,
+        )
+        if policy_error is not None:
+            return policy_error
+        if session is None:
+            return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
         existing = context.session_store.get_idempotent_response(
             scope="create_turn",
             session_id=session_id,
@@ -347,13 +428,13 @@ def create_turn(session_id: str) -> tuple[Any, int]:
         )
         if existing is not None:
             return success(existing)
-        if memory_policy != session["memory_policy"]:
-            context.session_store.update_memory_policy(
-                session_id=session_id,
-                memory_policy=memory_policy,
-                now_iso=now_iso(),
-            )
-            session["memory_policy"] = memory_policy
+        session, precheck_error, acquired_sandbox_lock = _ensure_sandbox_lock_preconditions(
+            context=context,
+            session=session,
+            sandbox_mode=sandbox_mode,
+        )
+        if precheck_error is not None:
+            return precheck_error
         try:
             trace_id = new_trace_id()
             payload = run_turn(
@@ -364,7 +445,11 @@ def create_turn(session_id: str) -> tuple[Any, int]:
                 trace_id=trace_id,
                 request_id=request_id,
             )
+            if acquired_sandbox_lock and not bool(payload.get("is_sandbox_mode", False)):
+                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
         except TurnExecutionError as err:
+            if acquired_sandbox_lock:
+                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
             logger.exception(
                 "回合执行失败: route=create_turn session_id=%s request_body=%s",
                 session_id,
@@ -382,6 +467,10 @@ def create_turn(session_id: str) -> tuple[Any, int]:
                 trace_id=err.trace_id,
                 trace=err.trace,
             )
+        except Exception:
+            if acquired_sandbox_lock:
+                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+            raise
         try:
             memory_summary = _build_memory_summary_if_needed(
                 context=context,
@@ -524,6 +613,7 @@ def _run_turn_stream_with_lock(
     context: Any,
     session_id: str,
     request_id: str,
+    body: dict[str, Any],
     session: dict[str, Any],
     user_input: str,
     character_id: str,
@@ -534,7 +624,8 @@ def _run_turn_stream_with_lock(
 ) -> None:
     """
     功能：在会话锁内执行流式回合与持久化，并向队列发送 done/error。
-    入参：context/session_id/request_id/session/user_input/character_id/sandbox_mode 为执行参数；
+    入参：context/session_id/request_id/body/session/user_input/character_id/sandbox_mode
+        为执行参数；
         narrative_callback（Callable[[str], None]）：GM 增量回调；
         fallback_trace_id（str）：回退 trace_id；target_queue（queue.Queue）：SSE 队列。
     出参：None。
@@ -542,6 +633,32 @@ def _run_turn_stream_with_lock(
     """
     session_lock = context.get_session_lock(session_id)
     with session_lock:
+        session, policy_error = _refresh_session_and_apply_memory_policy(
+            context=context,
+            session_id=session_id,
+            body=body,
+            character_id=character_id,
+        )
+        if policy_error is not None:
+            err_body = policy_error[0].get_json()
+            target_queue.put(
+                (
+                    "error",
+                    {
+                        "code": err_body["error"]["code"],
+                        "message": err_body["error"]["message"],
+                    },
+                )
+            )
+            return
+        if session is None:
+            target_queue.put(
+                (
+                    "error",
+                    {"code": "SESSION_NOT_FOUND", "message": "session_id 不存在"},
+                )
+            )
+            return
         existing = context.session_store.get_idempotent_response(
             scope="create_turn",
             session_id=session_id,
@@ -550,16 +667,40 @@ def _run_turn_stream_with_lock(
         if existing is not None:
             target_queue.put(("done", existing))
             return
-        _emit_sse_progress_events(target_queue)
-        payload = run_turn(
-            session,
-            user_input,
-            character_id,
-            sandbox_mode,
-            narrative_stream_callback=narrative_callback,
-            trace_id=fallback_trace_id,
-            request_id=request_id,
+        session, precheck_error, acquired_sandbox_lock = _ensure_sandbox_lock_preconditions(
+            context=context,
+            session=session,
+            sandbox_mode=sandbox_mode,
         )
+        if precheck_error is not None:
+            err_body = precheck_error[0].get_json()
+            target_queue.put(
+                (
+                    "error",
+                    {
+                        "code": err_body["error"]["code"],
+                        "message": err_body["error"]["message"],
+                    },
+                )
+            )
+            return
+        _emit_sse_progress_events(target_queue)
+        try:
+            payload = run_turn(
+                session,
+                user_input,
+                character_id,
+                sandbox_mode,
+                narrative_stream_callback=narrative_callback,
+                trace_id=fallback_trace_id,
+                request_id=request_id,
+            )
+            if acquired_sandbox_lock and not bool(payload.get("is_sandbox_mode", False)):
+                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+        except Exception:
+            if acquired_sandbox_lock:
+                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+            raise
         _emit_sse_detail_events(target_queue, payload)
         try:
             memory_summary = _build_memory_summary_if_needed(
@@ -634,6 +775,7 @@ def _generate_turn_stream_events(
                     context=context,
                     session_id=session_id,
                     request_id=request_id,
+                    body=body,
                     session=session,
                     user_input=user_input,
                     character_id=character_id,

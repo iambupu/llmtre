@@ -76,6 +76,62 @@ def test_persist_turn_result_with_idempotency_rolls_back_on_builder_error(tmp_pa
     assert current_turn_id == 0
 
 
+def test_create_session_with_idempotency_is_atomic_on_replay(tmp_path) -> None:
+    """
+    功能：验证 create_session 幂等事务在重放时不会重复创建会话，也不会产生孤儿会话。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示 create_session 幂等原子性退化。
+    """
+    db_path = str(tmp_path / "runtime_create_session_idem.db")
+    _init_runtime_db(db_path)
+    store = WebSessionStore(db_path)
+    payload = {
+        "session_id": "sess_atomic_created_01",
+        "character_id": "player_01",
+        "sandbox_mode": False,
+        "current_session_turn_id": 0,
+        "created_at": "2026-05-01T00:00:00Z",
+    }
+    first_payload, first_created = store.create_session_with_idempotency(
+        scope="create_session",
+        request_id="req_create_atomic_01",
+        session_id="sess_atomic_created_01",
+        character_id="player_01",
+        sandbox_mode=False,
+        now_iso="2026-05-01T00:00:00Z",
+        memory_policy={"mode": "auto", "max_turns": 20},
+        response_payload=payload,
+    )
+    second_payload, second_created = store.create_session_with_idempotency(
+        scope="create_session",
+        request_id="req_create_atomic_01",
+        session_id="sess_atomic_created_02",
+        character_id="player_01",
+        sandbox_mode=False,
+        now_iso="2026-05-01T00:00:01Z",
+        memory_policy={"mode": "auto", "max_turns": 20},
+        response_payload={**payload, "session_id": "sess_atomic_created_02"},
+    )
+    assert first_created is True
+    assert second_created is False
+    assert first_payload == second_payload
+    with sqlite3.connect(db_path) as connection:
+        session_count = int(connection.execute("SELECT COUNT(1) FROM web_sessions").fetchone()[0])
+        cached_session_id = str(
+            connection.execute(
+                """
+                SELECT session_id
+                FROM web_sessions
+                ORDER BY created_at ASC
+                LIMIT 1
+                """
+            ).fetchone()[0]
+        )
+    assert session_count == 1
+    assert cached_session_id == "sess_atomic_created_01"
+
+
 def test_persist_turn_result_with_idempotency_returns_cached_payload_on_replay(tmp_path) -> None:
     """
     功能：验证同 scope/session/request 重放时命中缓存，不重复推进会话回合。

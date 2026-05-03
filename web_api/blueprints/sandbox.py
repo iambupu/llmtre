@@ -26,7 +26,6 @@ sandbox_blueprint = Blueprint("sandbox", __name__, url_prefix="/api/sessions/<se
 
 def _sandbox_action(
     session_id: str,
-    session: dict[str, Any],
     request_id: str,
     action_text: str,
     flag_key: str,
@@ -34,8 +33,7 @@ def _sandbox_action(
 ) -> tuple[Any, int]:
     """
     功能：执行沙盒控制动作（并入或丢弃）的共享逻辑。
-    入参：session_id（str）：会话标识。session（dict[str, Any]）：会话对象。
-        request_id（str）：幂等键。
+    入参：session_id（str）：会话标识。request_id（str）：幂等键。
         action_text（str）：动作文本。flag_key（str）：响应标记键。scope（str）：幂等作用域。
     出参：tuple[Any, int]，统一响应结构。
     异常：主循环异常捕获后转换为 INTERNAL_ERROR，避免异常泄漏到接口层。
@@ -111,6 +109,40 @@ def _sandbox_action(
         errors.append({"stage": stage, "error": str(err)})
         return trace_id, trace
 
+    def _validate_sandbox_preconditions(
+        current_session: dict[str, Any],
+    ) -> tuple[bool, tuple[Any, int] | None]:
+        """
+        功能：校验沙盒控制动作的前置条件，避免非沙盒会话或空 Shadow 触发破坏性合并。
+        入参：current_session（dict[str, Any]）：锁内最新会话快照，
+            必须包含 sandbox_mode 与 character_id。
+        出参：tuple[bool, tuple[Any, int] | None]，首值表示是否通过校验；
+            未通过时第二项返回可直接下发的错误响应。
+        异常：函数内部不抛异常；运行时上下文缺失时由调用方既有异常处理兜底。
+        """
+        if not bool(current_session.get("sandbox_mode", False)):
+            return False, error(
+                "SANDBOX_STATE_INVALID",
+                "当前会话不在沙盒模式，无法执行沙盒控制动作",
+                409,
+            )
+        if context.main_loop is None:
+            return False, error("INTERNAL_ERROR", "主循环未初始化", 500)
+        if not context.main_loop.db_updater.is_sandbox_owner(current_session["session_id"]):
+            return False, error(
+                "SANDBOX_OWNER_MISMATCH",
+                "当前会话未持有沙盒租约，无法执行并入或回滚",
+                409,
+            )
+        # 提交/丢弃都依赖现存 Shadow 快照；若不存在则拒绝执行，防止 merge 空集清空 Active。
+        if not context.main_loop.db_updater.has_shadow_state():
+            return False, error(
+                "SHADOW_STATE_NOT_FOUND",
+                "未检测到可用的沙盒快照，无法执行并入或回滚",
+                409,
+            )
+        return True, None
+
     context = get_runtime_context()
     session_lock = context.get_session_lock(session_id)
     with session_lock:
@@ -121,12 +153,18 @@ def _sandbox_action(
         )
         if existing is not None:
             return success(existing)
+        fresh_session = get_session(session_id)
+        if fresh_session is None:
+            return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
+        ok, failure_response = _validate_sandbox_preconditions(fresh_session)
+        if not ok and failure_response is not None:
+            return failure_response
         try:
             trace_id = new_trace_id()
             payload = run_turn(
-                session=session,
+                session=fresh_session,
                 user_input=action_text,
-                character_id=session["character_id"],
+                character_id=fresh_session["character_id"],
                 sandbox_mode=True,
                 trace_id=trace_id,
                 request_id=request_id,
@@ -150,9 +188,9 @@ def _sandbox_action(
         try:
             recent_turns = context.session_store.get_recent_turns_for_memory(
                 session_id=session_id,
-                max_turns=int(session["memory_policy"]["max_turns"]),
+                max_turns=int(fresh_session["memory_policy"]["max_turns"]),
             )
-            draft_turn_id = int(session["current_turn_id"]) + 1
+            draft_turn_id = int(fresh_session["current_turn_id"]) + 1
             draft_turns = recent_turns + [
                 {
                     "turn_id": draft_turn_id,
@@ -163,7 +201,7 @@ def _sandbox_action(
             ]
             memory_summary, _ = build_memory(
                 turns=draft_turns,
-                max_turns=int(session["memory_policy"]["max_turns"]),
+                max_turns=int(fresh_session["memory_policy"]["max_turns"]),
             )
             raw_trace = payload.get("trace")
             trace_payload: dict[str, Any] = raw_trace if isinstance(raw_trace, dict) else {}
@@ -220,7 +258,6 @@ def commit_sandbox(session_id: str) -> tuple[Any, int]:
         return error("INVALID_ARGUMENT", "request_id 缺失或格式非法", 400)
     return _sandbox_action(
         session_id=session_id,
-        session=session,
         request_id=request_id,
         action_text="并入主线",
         flag_key="committed",
@@ -247,7 +284,6 @@ def discard_sandbox(session_id: str) -> tuple[Any, int]:
         return error("INVALID_ARGUMENT", "request_id 缺失或格式非法", 400)
     return _sandbox_action(
         session_id=session_id,
-        session=session,
         request_id=request_id,
         action_text="回滚沙盒",
         flag_key="discarded",

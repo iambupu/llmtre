@@ -246,7 +246,123 @@ class DBUpdater:
             row = cursor.execute("SELECT COUNT(1) FROM entities_shadow").fetchone()
             return bool(row and int(row[0]) > 0)
 
-    def fork_shadow_state(self, conn: sqlite3.Connection | None = None) -> bool:
+    def _get_sandbox_owner(self, conn: sqlite3.Connection) -> str | None:
+        """
+        功能：读取全局沙盒租约当前 owner。
+        入参：conn（sqlite3.Connection）：事务连接。
+        出参：str | None，存在 owner 返回会话 ID，否则返回 None。
+        异常：SQL 异常向上抛出，由调用方统一处理事务回滚。
+        """
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT owner_session_id FROM web_sandbox_lock WHERE lock_id = 1"
+        ).fetchone()
+        if row is None:
+            cursor.execute(
+                "INSERT INTO web_sandbox_lock(lock_id, owner_session_id) VALUES (1, NULL)"
+            )
+            return None
+        owner = row[0]
+        return str(owner) if owner else None
+
+    def is_sandbox_owner(
+        self,
+        session_id: str,
+        conn: sqlite3.Connection | None = None,
+    ) -> bool:
+        """
+        功能：判断给定会话是否持有全局沙盒租约。
+        入参：session_id（str）：会话 ID；conn（sqlite3.Connection | None）：可复用事务连接。
+        出参：bool，持有租约返回 True。
+        异常：SQL 异常向上抛出，由调用方处理。
+        """
+        owns_conn = conn is None
+        active_conn = conn or self._get_conn()
+        try:
+            owner = self._get_sandbox_owner(active_conn)
+            return owner == session_id
+        finally:
+            if owns_conn:
+                active_conn.close()
+
+    def acquire_sandbox_lock(
+        self,
+        session_id: str,
+        conn: sqlite3.Connection | None = None,
+    ) -> bool:
+        """
+        功能：抢占全局沙盒租约；空闲或已由当前会话持有时返回成功。
+        入参：session_id（str）：请求进入沙盒的会话 ID；
+            conn（sqlite3.Connection | None）：可复用事务连接。
+        出参：bool，抢占/续租成功返回 True，被其他会话占用返回 False。
+        异常：SQL 异常向上抛出，由调用方统一处理。
+        """
+        owns_conn = conn is None
+        active_conn = conn or self._get_conn()
+        try:
+            owner = self._get_sandbox_owner(active_conn)
+            if owner is not None and owner != session_id:
+                return False
+            cursor = active_conn.cursor()
+            cursor.execute(
+                """
+                UPDATE web_sandbox_lock
+                SET owner_session_id = ?,
+                    acquired_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE lock_id = 1
+                """,
+                (session_id,),
+            )
+            if owns_conn:
+                active_conn.commit()
+            return True
+        finally:
+            if owns_conn:
+                active_conn.close()
+
+    def release_sandbox_lock(
+        self,
+        session_id: str,
+        conn: sqlite3.Connection | None = None,
+        force: bool = False,
+    ) -> bool:
+        """
+        功能：释放全局沙盒租约；默认仅 owner 可释放，force=True 可忽略 owner 校验。
+        入参：session_id（str）：请求释放的会话 ID；
+            conn（sqlite3.Connection | None）：可复用事务连接；
+            force（bool，默认 False）：是否强制释放。
+        出参：bool，成功释放返回 True，不满足 owner 条件返回 False。
+        异常：SQL 异常向上抛出，由调用方统一处理。
+        """
+        owns_conn = conn is None
+        active_conn = conn or self._get_conn()
+        try:
+            owner = self._get_sandbox_owner(active_conn)
+            if owner is None:
+                return True
+            if not force and owner != session_id:
+                return False
+            cursor = active_conn.cursor()
+            cursor.execute(
+                """
+                UPDATE web_sandbox_lock
+                SET owner_session_id = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE lock_id = 1
+                """
+            )
+            if owns_conn:
+                active_conn.commit()
+            return True
+        finally:
+            if owns_conn:
+                active_conn.close()
+
+    def fork_shadow_state(
+        self,
+        conn: sqlite3.Connection | None = None,
+        session_id: str | None = None,
+    ) -> bool:
         """
         功能：Fork: 将 Active 表的数据克隆到 Shadow 表。
         入参：conn。
@@ -258,6 +374,11 @@ class DBUpdater:
         try:
             cursor = active_conn.cursor()
             try:
+                if session_id and not self.acquire_sandbox_lock(
+                    session_id=session_id,
+                    conn=active_conn,
+                ):
+                    return False
                 cursor.execute("DELETE FROM entities_shadow")
                 cursor.execute("DELETE FROM inventory_shadow")
                 cursor.execute("DELETE FROM world_state_shadow")
@@ -277,7 +398,11 @@ class DBUpdater:
             if owns_conn:
                 active_conn.close()
 
-    def merge_shadow_state(self, conn: sqlite3.Connection | None = None) -> bool:
+    def merge_shadow_state(
+        self,
+        conn: sqlite3.Connection | None = None,
+        session_id: str | None = None,
+    ) -> bool:
         """
         功能：Merge: 将 Shadow 表的变更合并回 Active 表。
         入参：conn。
@@ -289,6 +414,11 @@ class DBUpdater:
         try:
             cursor = active_conn.cursor()
             try:
+                if session_id and not self.is_sandbox_owner(
+                    session_id=session_id,
+                    conn=active_conn,
+                ):
+                    return False
                 cursor.execute("DELETE FROM entities_active")
                 cursor.execute("INSERT INTO entities_active SELECT * FROM entities_shadow")
 
@@ -309,7 +439,11 @@ class DBUpdater:
             if owns_conn:
                 active_conn.close()
 
-    def drop_shadow_state(self, conn: sqlite3.Connection | None = None) -> bool:
+    def drop_shadow_state(
+        self,
+        conn: sqlite3.Connection | None = None,
+        session_id: str | None = None,
+    ) -> bool:
         """
         功能：Drop: 丢弃影子表的所有变更。
         入参：conn。
@@ -321,9 +455,19 @@ class DBUpdater:
         try:
             cursor = active_conn.cursor()
             try:
+                if session_id and not self.is_sandbox_owner(
+                    session_id=session_id,
+                    conn=active_conn,
+                ):
+                    return False
                 cursor.execute("DELETE FROM entities_shadow")
                 cursor.execute("DELETE FROM inventory_shadow")
                 cursor.execute("DELETE FROM world_state_shadow")
+                if session_id and not self.release_sandbox_lock(
+                    session_id=session_id,
+                    conn=active_conn,
+                ):
+                    return False
                 if owns_conn:
                     active_conn.commit()
                 return True

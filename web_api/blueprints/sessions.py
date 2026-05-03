@@ -41,16 +41,6 @@ def create_session() -> tuple[Any, int]:
         return error("INVALID_ARGUMENT", "request_id 缺失或格式非法", 400)
 
     context = get_runtime_context()
-    existing = context.session_store.get_idempotent_response(
-        scope="create_session",
-        session_id="",
-        request_id=request_id,
-    )
-    if existing is not None:
-        # 幂等边界：命中缓存时不重复创建会话，记录命中日志便于核查重复提交。
-        logger.info("create_session 幂等命中: request_id=%s", request_id)
-        return success(existing, status_code=201)
-
     character_id = str(body.get("character_id", "player_01"))
     if not validate_character_id(character_id):
         logger.warning("create_session 参数非法: character_id 格式非法=%s", character_id)
@@ -72,21 +62,22 @@ def create_session() -> tuple[Any, int]:
     }
     # 新会话首屏必须先有 GM 开场叙事，再把同一叙事生成的选项返回前端。
     response_payload.update(build_initial_turn_payload(character_id, sandbox_mode))
-    context.session_store.create_session(
+    persisted_payload, created = context.session_store.create_session_with_idempotency(
+        scope="create_session",
+        request_id=request_id,
         session_id=session_id,
         character_id=character_id,
         sandbox_mode=sandbox_mode,
         now_iso=created_at,
         memory_policy=memory_policy,
-    )
-    context.session_store.save_idempotent_response(
-        scope="create_session",
-        session_id="",
-        request_id=request_id,
         response_payload=response_payload,
     )
+    if not created:
+        # 幂等边界：并发重放场景下事务内命中缓存，不重复创建会话。
+        logger.info("create_session 幂等命中: request_id=%s", request_id)
+        return success(persisted_payload, status_code=201)
     logger.info("create_session 创建成功: session_id=%s character_id=%s", session_id, character_id)
-    return success(response_payload, status_code=201)
+    return success(persisted_payload, status_code=201)
 
 
 @sessions_blueprint.get("/<session_id>")

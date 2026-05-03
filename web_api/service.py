@@ -113,7 +113,7 @@ def _ensure_runtime_ready() -> None:
     功能：确保 Flask 运行时依赖就绪，包含 SQLite 与向量库索引。
     入参：无。
     出参：None。
-    异常：数据库或向量库初始化失败时异常向上抛出；调用方应终止服务启动。
+    异常：数据库初始化失败时异常向上抛出；向量库失败仅记录告警并降级。
     """
     initializer = DBInitializer()
     if not initializer.is_db_initialized():
@@ -141,10 +141,10 @@ def _ensure_runtime_schema_ready(db_path: str) -> None:
 
 def _ensure_vector_index_ready() -> None:
     """
-    功能：校验向量库索引是否存在，缺失时触发一次 RAG 索引初始化。
+    功能：校验向量库索引是否存在，缺失时触发一次 RAG 索引初始化（失败可降级）。
     入参：无。
     出参：None。
-    异常：索引初始化失败或初始化后仍缺失核心文件时抛出 RuntimeError。
+    异常：函数内部不抛出异常；初始化失败时记录 warning 并维持 Web 可启动。
     """
     if os.path.exists(VECTOR_DOCSTORE_PATH):
         return
@@ -155,12 +155,14 @@ def _ensure_vector_index_ready() -> None:
         manager = RAGManager()
         manager.update_index()
     except Exception as error:  # noqa: BLE001
-        raise RuntimeError(f"向量库初始化失败: {error}") from error
+        logger.warning("向量库初始化失败，已降级为无 RAG 只读上下文: %s", str(error))
+        return
     if not os.path.exists(VECTOR_DOCSTORE_PATH):
-        raise RuntimeError(
+        logger.warning(
             "向量库初始化后仍未生成 docstore.json，"
-            "请检查 docs/ 与 config/rag_import_rules.json 的导入配置。"
+            "已降级为无 RAG 只读上下文；请检查 docs/ 与 config/rag_import_rules.json。"
         )
+        return
     logger.info("向量库初始化完成。")
 
 

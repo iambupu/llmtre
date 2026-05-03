@@ -541,6 +541,82 @@ class WebSessionStore:
             connection.commit()
             return persisted_turn_id
 
+    def create_session_with_idempotency(
+        self,
+        *,
+        scope: str,
+        request_id: str,
+        session_id: str,
+        character_id: str,
+        sandbox_mode: bool,
+        now_iso: str,
+        memory_policy: dict[str, Any],
+        response_payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """
+        功能：在单事务内完成 create_session 幂等命中检查、会话创建与幂等响应写入。
+        入参：scope/request_id（str）：幂等作用域与请求标识；
+            session_id/character_id（str）：待创建会话及角色；
+            sandbox_mode（bool）：沙盒开关；now_iso（str）：创建时间；
+            memory_policy（dict[str, Any]）：会话记忆策略；
+            response_payload（dict[str, Any]）：返回给客户端的幂等响应体。
+        出参：tuple[dict[str, Any], bool]，第一个值为响应体；
+            第二个值表示是否新创建（True=新创建，False=命中幂等）。
+        异常：SQL/JSON 序列化异常向上抛出；事务自动回滚，避免会话与幂等键不一致。
+        """
+        response_json = json.dumps(response_payload, ensure_ascii=False)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT response_json
+                FROM web_idempotency_keys
+                WHERE scope = ? AND session_id = '' AND request_id = ?
+                """,
+                (scope, request_id),
+            ).fetchone()
+            if existing is not None:
+                loaded = json.loads(str(existing["response_json"]))
+                if isinstance(loaded, dict):
+                    connection.commit()
+                    return cast(dict[str, Any], loaded), False
+            connection.execute(
+                """
+                INSERT INTO web_sessions(
+                    session_id,
+                    character_id,
+                    sandbox_mode,
+                    current_turn_id,
+                    memory_summary,
+                    memory_policy_json,
+                    created_at,
+                    last_active_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, 0, '', ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    character_id,
+                    int(sandbox_mode),
+                    json.dumps(memory_policy, ensure_ascii=False),
+                    now_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO web_idempotency_keys(scope, session_id, request_id, response_json)
+                VALUES(?, '', ?, ?)
+                ON CONFLICT(scope, session_id, request_id)
+                DO UPDATE SET response_json = excluded.response_json
+                """,
+                (scope, request_id, response_json),
+            )
+            connection.commit()
+            return response_payload, True
+
     def clear_session_turns_and_reset(
         self,
         session_id: str,

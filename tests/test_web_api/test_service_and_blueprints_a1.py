@@ -34,6 +34,90 @@ from web_api.service import (
 from web_api.session_store import WebSessionStore
 
 
+class _RuntimeFakeDBUpdater:
+    """
+    功能：为 runtime.reset 测试提供可控沙盒租约与 Shadow 清理行为。
+    入参：无。
+    出参：_RuntimeFakeDBUpdater。
+    异常：无。
+    """
+
+    def __init__(self) -> None:
+        """
+        功能：初始化默认 owner 与事务记录容器。
+        入参：无。
+        出参：None。
+        异常：无。
+        """
+        self.owner_session_id: str | None = None
+
+    def is_sandbox_owner(self, session_id: str) -> bool:
+        """
+        功能：判断会话是否持有租约。
+        入参：session_id（str）：会话 ID。
+        出参：bool。
+        异常：无。
+        """
+        return self.owner_session_id == session_id
+
+    def begin_transaction(self) -> dict[str, Any]:
+        """
+        功能：返回最小事务句柄。
+        入参：无。
+        出参：dict[str, Any]。
+        异常：无。
+        """
+        return {"open": True}
+
+    def drop_shadow_state(self, conn: dict[str, Any], session_id: str | None = None) -> bool:
+        """
+        功能：模拟 Shadow 清理并释放租约。
+        入参：conn（dict[str, Any]）：事务句柄；session_id（str | None）：会话 ID。
+        出参：bool。
+        异常：无。
+        """
+        if session_id and self.owner_session_id != session_id:
+            return False
+        self.owner_session_id = None
+        return True
+
+    def commit_transaction(self, conn: dict[str, Any]) -> None:
+        """
+        功能：提交最小事务句柄。
+        入参：conn（dict[str, Any]）：事务句柄。
+        出参：None。
+        异常：无。
+        """
+        conn["open"] = False
+
+    def rollback_transaction(self, conn: dict[str, Any]) -> None:
+        """
+        功能：回滚最小事务句柄。
+        入参：conn（dict[str, Any]）：事务句柄。
+        出参：None。
+        异常：无。
+        """
+        conn["open"] = False
+
+
+class _RuntimeFakeMainLoop:
+    """
+    功能：提供带 db_updater 的最小 main_loop 外观，供 runtime 蓝图测试使用。
+    入参：db_updater（_RuntimeFakeDBUpdater）：沙盒租约探针。
+    出参：_RuntimeFakeMainLoop。
+    异常：无。
+    """
+
+    def __init__(self, db_updater: _RuntimeFakeDBUpdater) -> None:
+        """
+        功能：保存 db_updater 依赖。
+        入参：db_updater（_RuntimeFakeDBUpdater）。
+        出参：None。
+        异常：无。
+        """
+        self.db_updater = db_updater
+
+
 class _BlueprintRuntimeContext(ApiRuntimeContext):
     """
     功能：为 sessions/memory/runtime 蓝图测试提供最小运行时上下文，隔离主循环依赖。
@@ -50,7 +134,8 @@ class _BlueprintRuntimeContext(ApiRuntimeContext):
         异常：底层 SQLite 初始化异常向上抛出。
         """
         super().__init__()
-        self.main_loop = object()
+        self.fake_db_updater = _RuntimeFakeDBUpdater()
+        self.main_loop = _RuntimeFakeMainLoop(db_updater=self.fake_db_updater)
         self.session_store = WebSessionStore(db_path)
         self._locks: dict[str, threading.Lock] = {}
 
@@ -207,6 +292,37 @@ def test_runtime_reset_session_idempotent(api_client) -> None:
     assert first_body["reset"] is True
     assert first_body["current_session_turn_id"] == 0
     assert second_body["current_session_turn_id"] == 0
+
+
+def test_runtime_reset_rejects_when_sandbox_owner_mismatch(api_client) -> None:
+    """
+    功能：验证会话处于沙盒模式但未持有租约时，reset 返回 SANDBOX_OWNER_MISMATCH。
+    入参：api_client（fixture）：测试客户端。
+    出参：None。
+    异常：断言失败表示 runtime.reset 的 owner 互斥校验退化。
+    """
+    context = api_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    context.session_store.update_memory_summary(
+        session_id="sess_a1scope01",
+        memory_summary="seed",
+        now_iso=now_iso(),
+    )
+    import sqlite3
+
+    with sqlite3.connect(context.session_store.db_path) as connection:
+        connection.execute(
+            "UPDATE web_sessions SET sandbox_mode = 1 WHERE session_id = ?",
+            ("sess_a1scope01",),
+        )
+        connection.commit()
+    context.fake_db_updater.owner_session_id = "sess_other_owner"
+    resp = api_client.post(
+        "/api/sessions/sess_a1scope01/reset",
+        json={"request_id": "req_a1reset_owner_mismatch_001", "keep_character": True},
+    )
+    body = resp.get_json()
+    assert resp.status_code == 409
+    assert body["error"]["code"] == "SANDBOX_OWNER_MISMATCH"
 
 
 def test_sessions_memory_runtime_idempotent_have_log_evidence(
@@ -688,14 +804,15 @@ def test_ensure_vector_index_ready_has_log_evidence_for_init_flow(
     assert "向量库初始化完成" in caplog.text
 
 
-def test_ensure_vector_index_ready_raises_when_docstore_missing_after_update(
+def test_ensure_vector_index_ready_degrades_when_docstore_missing_after_update(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
-    功能：验证索引初始化后仍缺少 docstore 时抛 RuntimeError，阻止服务在不一致状态下启动。
-    入参：monkeypatch。
+    功能：验证索引初始化后仍缺少 docstore 时记录降级告警，不阻断 Web 启动。
+    入参：monkeypatch；caplog。
     出参：None。
-    异常：断言失败表示索引完整性校验失效。
+    异常：断言失败表示 RAG 启动降级语义回归。
     """
 
     class _FakeRAGManager:
@@ -704,8 +821,31 @@ def test_ensure_vector_index_ready_raises_when_docstore_missing_after_update(
 
     monkeypatch.setattr("web_api.service.os.path.exists", lambda _path: False)
     monkeypatch.setattr("tools.rag.RAGManager", _FakeRAGManager)
-    with pytest.raises(RuntimeError, match="向量库初始化后仍未生成 docstore.json"):
-        _ensure_vector_index_ready()
+    caplog.set_level(logging.WARNING, logger="WebAPI.Runtime")
+    _ensure_vector_index_ready()
+    assert "向量库初始化后仍未生成 docstore.json" in caplog.text
+
+
+def test_ensure_vector_index_ready_degrades_when_update_index_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    功能：验证索引初始化抛异常时仅记录降级告警，保证 Web 启动可继续。
+    入参：monkeypatch；caplog。
+    出参：None。
+    异常：断言失败表示 RAG 初始化异常降级语义回归。
+    """
+
+    class _BrokenRAGManager:
+        def update_index(self) -> None:
+            raise RuntimeError("index failed")
+
+    monkeypatch.setattr("web_api.service.os.path.exists", lambda _path: False)
+    monkeypatch.setattr("tools.rag.RAGManager", _BrokenRAGManager)
+    caplog.set_level(logging.WARNING, logger="WebAPI.Runtime")
+    _ensure_vector_index_ready()
+    assert "向量库初始化失败，已降级为无 RAG 只读上下文" in caplog.text
 
 
 def test_run_turn_postprocess_malformed_result_records_failed_trace_stages(

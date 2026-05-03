@@ -168,6 +168,22 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
     )
     cursor.execute(
         """
+        CREATE TABLE IF NOT EXISTS web_sandbox_lock (
+            lock_id INTEGER PRIMARY KEY CHECK (lock_id = 1),
+            owner_session_id TEXT,
+            acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO web_sandbox_lock(lock_id, owner_session_id)
+        VALUES (1, NULL)
+        """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_web_idempotency_scope_session
         ON web_idempotency_keys(scope, session_id)
         """

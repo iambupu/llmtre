@@ -15,6 +15,61 @@ from web_api.service import ApiRuntimeContext, TurnExecutionError
 from web_api.session_store import WebSessionStore
 
 
+class _FakeDBUpdater:
+    """
+    功能：提供可控的 Shadow 状态探针，供 sandbox 接口前置校验测试复用。
+    入参：has_shadow（bool，默认 True）：是否存在可用 Shadow 快照。
+    出参：_FakeDBUpdater，暴露 `has_shadow_state` 接口。
+    异常：无显式异常；调用方可直接修改 has_shadow 模拟状态切换。
+    """
+
+    def __init__(self, has_shadow: bool = True) -> None:
+        """
+        功能：初始化 Shadow 状态开关。
+        入参：has_shadow（bool，默认 True）：Shadow 快照是否存在。
+        出参：None。
+        异常：无。
+        """
+        self.has_shadow = has_shadow
+        self.owner_session_id: str | None = "sess_a1demo01"
+
+    def has_shadow_state(self) -> bool:
+        """
+        功能：返回当前 Shadow 快照可用性。
+        入参：无。
+        出参：bool，True 表示存在可用 Shadow 快照。
+        异常：无。
+        """
+        return self.has_shadow
+
+    def is_sandbox_owner(self, session_id: str) -> bool:
+        """
+        功能：返回当前会话是否持有沙盒租约。
+        入参：session_id（str）：会话 ID。
+        出参：bool，匹配 owner 时返回 True。
+        异常：无。
+        """
+        return self.owner_session_id == session_id
+
+
+class _FakeMainLoop:
+    """
+    功能：提供最小 main_loop 外观，满足 sandbox 蓝图读取 `db_updater` 的依赖。
+    入参：db_updater（_FakeDBUpdater）：可控 Shadow 状态探针。
+    出参：_FakeMainLoop。
+    异常：无。
+    """
+
+    def __init__(self, db_updater: _FakeDBUpdater) -> None:
+        """
+        功能：保存 db_updater 供蓝图校验阶段访问。
+        入参：db_updater（_FakeDBUpdater）：Shadow 状态探针。
+        出参：None。
+        异常：无。
+        """
+        self.db_updater = db_updater
+
+
 class _FakeRuntimeContext(ApiRuntimeContext):
     """
     功能：为 sandbox 蓝图测试提供最小运行时上下文，复用真实会话存储与会话锁语义。
@@ -31,7 +86,8 @@ class _FakeRuntimeContext(ApiRuntimeContext):
         异常：底层文件系统或 sqlite 初始化失败时向上抛出。
         """
         super().__init__()
-        self.main_loop = object()
+        self.shadow_probe = _FakeDBUpdater(has_shadow=True)
+        self.main_loop = _FakeMainLoop(db_updater=self.shadow_probe)
         self.session_store = WebSessionStore(db_path)
         self._locks: dict[str, threading.Lock] = {}
 
@@ -314,3 +370,70 @@ def test_sandbox_commit_returns_internal_error_on_unexpected_run_turn_exception(
     body = resp.get_json()
     assert resp.status_code == 500
     assert body["error"]["code"] == "INTERNAL_ERROR"
+
+
+def test_sandbox_commit_rejects_when_session_not_in_sandbox_mode(sandbox_client) -> None:
+    """
+    功能：验证 commit 在会话已离开沙盒模式时直接拒绝，避免 API 层强行透传 sandbox_mode=True。
+    入参：sandbox_client（fixture）：最小 Flask 客户端。
+    出参：None。
+    异常：断言失败表示“会话模式守卫”分支退化。
+    """
+    runtime = sandbox_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    runtime.session_store.update_memory_summary(  # 仅借助现有存储更新接口触发一次会话写入路径
+        session_id="sess_a1demo01",
+        memory_summary="keep",
+        now_iso=_now_iso(),
+    )
+    with sqlite3.connect(runtime.session_store.db_path) as connection:
+        connection.execute(
+            "UPDATE web_sessions SET sandbox_mode = 0 WHERE session_id = ?",
+            ("sess_a1demo01",),
+        )
+        connection.commit()
+    resp = sandbox_client.post(
+        "/api/sessions/sess_a1demo01/sandbox/commit",
+        json={"request_id": "req_guard_not_sandbox_001"},
+    )
+    body = resp.get_json()
+    assert resp.status_code == 409
+    assert body["error"]["code"] == "SANDBOX_STATE_INVALID"
+    assert sandbox_client.call_count["run_turn"] == 0
+
+
+def test_sandbox_commit_rejects_when_shadow_state_missing(sandbox_client) -> None:
+    """
+    功能：验证 commit 在 Shadow 快照不存在时拒绝执行，阻断 merge 空表清空 Active 的风险链路。
+    入参：sandbox_client（fixture）：最小 Flask 客户端。
+    出参：None。
+    异常：断言失败表示“Shadow 存在性守卫”分支退化。
+    """
+    runtime = sandbox_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    runtime.shadow_probe.has_shadow = False
+    resp = sandbox_client.post(
+        "/api/sessions/sess_a1demo01/sandbox/commit",
+        json={"request_id": "req_guard_no_shadow_001"},
+    )
+    body = resp.get_json()
+    assert resp.status_code == 409
+    assert body["error"]["code"] == "SHADOW_STATE_NOT_FOUND"
+    assert sandbox_client.call_count["run_turn"] == 0
+
+
+def test_sandbox_commit_rejects_when_owner_mismatch(sandbox_client) -> None:
+    """
+    功能：验证 commit 在会话未持有沙盒租约时拒绝执行，防止跨会话提交他人 Shadow。
+    入参：sandbox_client（fixture）：最小 Flask 客户端。
+    出参：None。
+    异常：断言失败表示 owner 互斥守卫分支退化。
+    """
+    runtime = sandbox_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    runtime.shadow_probe.owner_session_id = "sess_other_owner"
+    resp = sandbox_client.post(
+        "/api/sessions/sess_a1demo01/sandbox/commit",
+        json={"request_id": "req_guard_owner_mismatch_001"},
+    )
+    body = resp.get_json()
+    assert resp.status_code == 409
+    assert body["error"]["code"] == "SANDBOX_OWNER_MISMATCH"
+    assert sandbox_client.call_count["run_turn"] == 0

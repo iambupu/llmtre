@@ -101,12 +101,51 @@ class DBInitializer:
 
     def is_db_initialized(self) -> bool:
         """
-        功能：执行 `is_db_initialized` 相关业务逻辑。
+        功能：检查数据库是否已具备可运行的核心 schema 与关键种子数据。
         入参：无。
-        出参：bool。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        出参：bool，核心表齐全且存在关键种子时返回 True，否则返回 False。
+        异常：函数内部捕获 sqlite/IO 异常并降级返回 False，同时记录告警日志。
         """
-        return os.path.exists(self.db_path)
+        if not os.path.exists(self.db_path):
+            return False
+        required_tables = (
+            "entities_active",
+            "items",
+            "inventory_active",
+            "timeline",
+        )
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                for table_name in required_tables:
+                    row = cursor.execute(
+                        """
+                        SELECT 1
+                        FROM sqlite_master
+                        WHERE type = 'table' AND name = ?
+                        LIMIT 1
+                        """,
+                        (table_name,),
+                    ).fetchone()
+                    if row is None:
+                        return False
+                timeline_row = cursor.execute(
+                    "SELECT 1 FROM timeline WHERE id = 0 LIMIT 1"
+                ).fetchone()
+                if timeline_row is None:
+                    return False
+                player_row = cursor.execute(
+                    "SELECT 1 FROM entities_active WHERE entity_id = 'player_01' LIMIT 1"
+                ).fetchone()
+                if player_row is None:
+                    return False
+                item_row = cursor.execute("SELECT 1 FROM items LIMIT 1").fetchone()
+                if item_row is None:
+                    return False
+                return True
+        except Exception as error:  # noqa: BLE001
+            logger.warning("数据库完整性检查失败，视为未初始化: %s", str(error))
+            return False
 
     def initialize_db(self) -> None:
         """

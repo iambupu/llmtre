@@ -23,21 +23,22 @@ def build_write_plan(loop: Any, state: Mapping[str, Any]) -> list[dict[str, Any]
     diff = state.get("physics_diff") or {}
     is_sandbox = state.get("is_sandbox_mode", False)
     entity_id = state["active_character_id"]
+    session_id = str(state.get("session_id", ""))
     write_plan: list[dict[str, Any]] = []
 
     if action_type == "commit_sandbox":
-        write_plan.append({"type": "merge_shadow"})
-        write_plan.append({"type": "drop_shadow"})
+        write_plan.append({"type": "merge_shadow", "session_id": session_id})
+        write_plan.append({"type": "drop_shadow", "session_id": session_id})
         write_plan.append({"type": "advance_turn", "turns": 1})
         return write_plan
 
     if action_type == "discard_sandbox":
-        write_plan.append({"type": "drop_shadow"})
+        write_plan.append({"type": "drop_shadow", "session_id": session_id})
         write_plan.append({"type": "advance_turn", "turns": 1})
         return write_plan
 
     if is_sandbox and not loop.db_updater.has_shadow_state():
-        write_plan.append({"type": "fork_shadow"})
+        write_plan.append({"type": "fork_shadow", "session_id": session_id})
 
     if diff:
         write_plan.append(
@@ -86,11 +87,26 @@ def execute_write_op(loop: Any, op: dict[str, Any], conn: Any | None = None) -> 
     """
     op_type = str(op.get("type", ""))
     if op_type == "fork_shadow":
-        return bool(loop.db_updater.fork_shadow_state(conn=conn))
+        return bool(
+            loop.db_updater.fork_shadow_state(
+                conn=conn,
+                session_id=str(op.get("session_id", "")) or None,
+            )
+        )
     if op_type == "merge_shadow":
-        return bool(loop.db_updater.merge_shadow_state(conn=conn))
+        return bool(
+            loop.db_updater.merge_shadow_state(
+                conn=conn,
+                session_id=str(op.get("session_id", "")) or None,
+            )
+        )
     if op_type == "drop_shadow":
-        return bool(loop.db_updater.drop_shadow_state(conn=conn))
+        return bool(
+            loop.db_updater.drop_shadow_state(
+                conn=conn,
+                session_id=str(op.get("session_id", "")) or None,
+            )
+        )
     if op_type == "apply_diff":
         return bool(
             loop.db_updater.apply_diff(
