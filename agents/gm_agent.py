@@ -17,6 +17,7 @@ from game_workflows.main_loop_config import load_main_loop_rules
 from state.contracts.agent import GMOutputBlock
 
 logger = logging.getLogger("Agent.GM")
+GM_GENERATED_QUICK_ACTIONS_KEY = "_gm_generated_quick_actions"
 
 
 class GMAgent:
@@ -45,7 +46,6 @@ class GMAgent:
         self.llm_enabled = bool(self.model_binding.get("enabled", False))
         self.llm_config = dict(self.model_binding.get("llm_config") or {})
         self.llm_timeout_seconds = int(self.model_binding.get("timeout_seconds", 30))
-        self._last_generated_quick_actions: list[str] = []
 
     def render(
         self,
@@ -60,7 +60,8 @@ class GMAgent:
         出参：str，可直接给玩家展示的叙事文本。
         异常：模型调用异常在内部捕获并降级到模板渲染；流式回调异常被忽略，模板渲染异常向上抛出。
         """
-        self._last_generated_quick_actions = []
+        # 请求边界：快捷行动只挂在当前 state，避免共享 GMAgent 实例跨 Web session 串话。
+        state.pop(GM_GENERATED_QUICK_ACTIONS_KEY, None)
         if self.llm_enabled:
             llm_text = self._render_with_llm(state, stream_callback=stream_callback)
             if llm_text:
@@ -140,7 +141,7 @@ class GMAgent:
         try:
             with urllib.request.urlopen(request, timeout=self.llm_timeout_seconds) as response:
                 if stream_callback is not None:
-                    text = self._read_ollama_stream(response, stream_callback)
+                    text = self._read_ollama_stream(response, stream_callback, state)
                     if text:
                         logger.info(
                             (
@@ -170,13 +171,13 @@ class GMAgent:
                 return None
             text = str(payload_mapping.get("response", "")).strip()
             if text:
+                state[GM_GENERATED_QUICK_ACTIONS_KEY] = self._parse_embedded_quick_actions(text)
                 logger.info(
                     "GM LLM 渲染成功: provider=ollama model=%s base_url=%s timeout=%ss",
                     model,
                     base_url,
                     self.llm_timeout_seconds,
                 )
-                self._last_generated_quick_actions = self._parse_embedded_quick_actions(text)
                 return self._remove_quick_actions_block(text).strip()
             self._log_llm_failure(
                 "empty_response",
@@ -228,11 +229,13 @@ class GMAgent:
         self,
         response: Any,
         stream_callback: Callable[[str], None],
+        state: dict[str, Any],
     ) -> str:
         """
         功能：读取 Ollama `/api/generate` 的 JSONL 流，边收集最终文本边推送叙事片段。
         入参：response（Any）：urllib HTTP 响应对象；
-            stream_callback（Callable[[str], None]）：片段回调。
+            stream_callback（Callable[[str], None]）：片段回调；
+            state（dict[str, Any]）：当前请求状态，用于保存请求局部快捷行动。
         出参：str，合并后的完整叙事文本。
         异常：单行 JSON 解析失败时跳过该行；回调异常被捕获并记录，避免中断模型读取。
         """
@@ -261,7 +264,7 @@ class GMAgent:
             if bool(payload.get("done", False)):
                 break
         full_text = self._remove_thinking_blocks("".join(chunks))
-        self._last_generated_quick_actions = self._parse_embedded_quick_actions(full_text)
+        state[GM_GENERATED_QUICK_ACTIONS_KEY] = self._parse_embedded_quick_actions(full_text)
         return self._remove_quick_actions_block(full_text).strip()
 
     def _filter_hidden_delta(self, delta: str, hidden_tag: str) -> tuple[str, str]:
@@ -361,8 +364,9 @@ class GMAgent:
         constrained_actions = self._affordance_quick_actions(state)
         if constrained_actions:
             return constrained_actions
-        if self._last_generated_quick_actions:
-            return self._last_generated_quick_actions
+        generated_actions = state.get(GM_GENERATED_QUICK_ACTIONS_KEY)
+        if isinstance(generated_actions, list) and generated_actions:
+            return [str(action) for action in generated_actions]
         if self.llm_enabled:
             actions = self._suggest_quick_actions_with_llm(state, final_response)
             if actions:

@@ -176,7 +176,9 @@ def initialize_runtime(app: Flask) -> None:
     _ensure_runtime_ready()
     event_bus = EventBus(registry_path=REGISTRY_PATH, mods_root=MODS_ROOT)
     context = ApiRuntimeContext()
-    context.main_loop = MainEventLoop(event_bus=event_bus, outer_bridge=NoOpOuterLoopBridge())
+    # 配置来源：MainEventLoop 会读取 config/main_loop_rules.json 的 outer_loop.default_bridge；
+    # Web 层不显式覆盖外环桥，避免 API 路径把 state_changed/turn_ended 投递降级为 noop。
+    context.main_loop = MainEventLoop(event_bus=event_bus)
     app.extensions["tre_api_context"] = context
 
 

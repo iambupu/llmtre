@@ -260,17 +260,59 @@ def test_gm_stream_response_filters_hidden_blocks_and_keeps_quick_actions(
     )
     caplog.set_level(logging.WARNING, logger="Agent.GM")
     chunks: list[str] = []
+    state = {"is_valid": True, "action_intent": {"type": "wait"}}
 
     text = agent.render(
-        {"is_valid": True, "action_intent": {"type": "wait"}},
+        state,
         stream_callback=chunks.append,
     )
-    actions = agent.suggest_quick_actions({"scene_snapshot": {}}, text)
+    actions = agent.suggest_quick_actions(state, text)
 
     assert text == "正文一正文二结尾"
     assert chunks == ["正文一", "正文二", "结尾"]
     assert actions == ["观察门", "询问人"]
     assert "GM LLM 流式响应行无法解析，已跳过" in caplog.text
+
+
+def test_gm_embedded_quick_actions_are_request_local(monkeypatch) -> None:
+    """
+    功能：验证嵌入式快捷行动绑定到本次 state，不会被同一 GMAgent 的后续请求覆盖。
+    入参：monkeypatch：按顺序注入两次非流式 LLM 响应。
+    出参：None。
+    异常：断言失败表示共享 GMAgent 实例存在跨请求 quick actions 串话风险。
+    """
+    agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
+    agent.llm_enabled = True
+    agent.llm_config = {"provider": "ollama", "model": "test-model"}
+    responses = iter(
+        [
+            _Response(
+                (
+                    '{"response":"甲叙事<quick_actions>[\\"甲行动一\\",\\"甲行动二\\"]'
+                    '</quick_actions>"}'
+                ).encode()
+            ),
+            _Response(
+                (
+                    '{"response":"乙叙事<quick_actions>[\\"乙行动一\\",\\"乙行动二\\"]'
+                    '</quick_actions>"}'
+                ).encode()
+            ),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: next(responses))
+    state_a = {"scene_snapshot": {}}
+    state_b = {"scene_snapshot": {}}
+
+    text_a = agent.render(state_a)
+    text_b = agent.render(state_b)
+    actions_a = agent.suggest_quick_actions(state_a, text_a)
+    actions_b = agent.suggest_quick_actions(state_b, text_b)
+
+    assert text_a == "甲叙事"
+    assert text_b == "乙叙事"
+    assert actions_a == ["甲行动一", "甲行动二"]
+    assert actions_b == ["乙行动一", "乙行动二"]
 
 
 def test_gm_stream_callback_failure_is_logged_and_stream_continues(

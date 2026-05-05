@@ -56,7 +56,7 @@ Documentation = "https://github.com/llmtre/docs"
 Repository = "https://github.com/llmtre"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "tools*", "workflows*", "core*"]
+include = ["game_workflows*", "state*", "web_api*", "config*", "agents*", "tools*", "core*"]
 
 [tool.black]
 line-length = 100

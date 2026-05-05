@@ -28,6 +28,8 @@ def build_loop(tmp_path):
         rag_bridge=DummyRAGBridge(),
         db_updater=db_updater,
         entity_probes=entity_probes,
+        # 测试隔离边界：默认使用临时目录下的 Agent 上下文，避免读取仓库根长期记忆文件。
+        agent_context_dir=tmp_path / ".agent_context",
     )
     loop.nlu_agent.llm_enabled = False
     loop.gm_agent.llm_enabled = False
@@ -90,6 +92,8 @@ def build_loop_with_outer(tmp_path, outer_bridge):
         outer_bridge=outer_bridge,
         db_updater=db_updater,
         entity_probes=entity_probes,
+        # 测试隔离边界：默认使用临时目录下的 Agent 上下文，避免读取仓库根长期记忆文件。
+        agent_context_dir=tmp_path / ".agent_context",
     )
     loop.nlu_agent.llm_enabled = False
     loop.gm_agent.llm_enabled = False
@@ -130,6 +134,8 @@ def build_loop_with_rag(tmp_path, rag_bridge):
         rag_bridge=rag_bridge,
         db_updater=db_updater,
         entity_probes=entity_probes,
+        # 测试隔离边界：默认使用临时目录下的 Agent 上下文，避免读取仓库根长期记忆文件。
+        agent_context_dir=tmp_path / ".agent_context",
     )
     loop.nlu_agent.llm_enabled = False
     loop.gm_agent.llm_enabled = False
@@ -239,6 +245,31 @@ def test_main_event_loop_request_context_overrides_runtime_inputs(tmp_path):
     assert result["session_id"] == "sess_ctx_001"
     assert result["active_character_id"] == "player_01"
     assert result["scene_snapshot"]["recent_memory"] == "上一回合摘要"
+
+
+def test_main_event_loop_mounts_agent_context_memory(tmp_path, caplog):
+    """
+    功能：验证主循环会把 `.agent_context/MEMORY.md` 挂载到 SceneSnapshot.recent_memory。
+    入参：tmp_path（pytest fixture）：临时数据库和 Agent 上下文目录；caplog：日志捕获器。
+    出参：None。
+    异常：断言失败表示 Agent 长期记忆没有进入智能体上下文。
+    """
+    context_dir = tmp_path / ".agent_context"
+    context_dir.mkdir()
+    (context_dir / "MEMORY.md").write_text(
+        "# 长期记忆\n玩家在旧矿洞救下了向导。\n",
+        encoding="utf-8",
+    )
+    loop = build_loop(tmp_path)
+    loop.agent_context_dir = context_dir
+    caplog.set_level("INFO", logger="Agent.Context")
+
+    result = asyncio.run(loop.run("观察周围", recent_memory="第1回合：抵达营地"))
+
+    recent_memory = result["scene_snapshot"]["recent_memory"]
+    assert "第1回合：抵达营地" in recent_memory
+    assert "玩家在旧矿洞救下了向导" in recent_memory
+    assert "Agent 上下文记忆加载成功" in caplog.text
 
 
 def test_main_event_loop_emits_minimal_outer_events(tmp_path):

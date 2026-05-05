@@ -23,10 +23,16 @@
 pip install -r requirements.txt
 ```
 
+开发时推荐在仓库根目录以源码方式运行命令。若需要按 Python 包方式进行可编辑安装，可执行：
+
+```bash
+pip install -e .
+```
+
 ### 2. 配置模型（可选但推荐）
 
 - RAG 配置：`config/rag_config.yml`
-- Agent（叙事）配置：`config/agent_model_config.yml`
+- Agent 配置：`config/agent_model_config.yml`
 
 本仓库当前验证过的本地模型组合为 `ollama/qwen3:8b`（LLM）与 `ollama/bge-m3`（embedding）。
 
@@ -40,7 +46,7 @@ python tools/mod_manager.py scan
 
 说明：
 - `docs/` 默认在 `.gitignore` 中忽略；请自行放入规则书/设定文档后再导入建索引。
-- 若你跳过手动初始化，`python app.py` 启动时也会尝试自动补齐 SQLite 与向量索引；自动索引失败会直接阻断启动并给出报错提示。
+- 若你跳过手动初始化，`python app.py` 启动时也会尝试自动补齐 SQLite 与向量索引；向量索引初始化失败会记录告警并降级为无 RAG 只读上下文，Web 仍会继续启动。
 
 ### 4. 启动服务并打开页面
 
@@ -179,16 +185,30 @@ python tools/doc_importer.py --sync
 - `bindings.agents.nlu`：NLU 绑定；当前为 `rule_first`。
 - `bindings.agents.gm`：GM 叙事绑定；当前为 `llm_first`。
 - `bindings.agents.evolution`：外环演化 Agent 绑定；当前默认关闭。
-- `web_api.turn_timeout_seconds`：Web 回合超时配置记录；当前 Web 实现仍以 `web_api/service.py` 中的 `TURN_TIMEOUT_SECONDS = 180` 为准。
 
-只验证确定性主链路时，可以关闭 GM 模型：
+只验证纯确定性主链路时，需要同时关闭 NLU 和 GM 模型：
 
 ```yaml
 bindings:
+  agents.nlu:
+    enabled: false
+    mode: "deterministic"
+    llm_profile: null
   agents.gm:
     enabled: false
     mode: "deterministic"
     llm_profile: null
+```
+
+如果 RAG 索引不存在，启动时仍可能触发向量索引初始化，embedding 配置也可能依赖 Ollama。纯确定性验收时建议先准备好索引，或在 `config/main_loop_rules.json` 中临时关闭：
+
+```json
+{
+  "rag": {
+    "read_only_enabled": false,
+    "auto_initialize": false
+  }
+}
 ```
 
 ### `config/main_loop_rules.json`
@@ -204,6 +224,17 @@ bindings:
 - `outer_loop`：外环事件投递、补偿重放、超时、世界演化时间步长。
 - `scene_defaults`：缺省场景、可用行动、建议行动。
 - `narrative_templates`：模型不可用或确定性渲染时使用的叙事模板。
+
+### `.agent_context/`
+
+保存本地 Agent 运行期上下文规范与长期叙事摘要。
+
+核心文件：
+- `AGENTS.md`：Agent 上下文分层、读写边界和协作规范。
+- `OPS.md`：工具调用、数据流和错误记录规范。
+- `MEMORY.md`：跨会话长期剧情摘要池。
+
+运行时，主循环会只读加载 `.agent_context/MEMORY.md`，过滤空模板和占位注释后，与 Web 会话近期记忆合并到 `SceneSnapshot.recent_memory`。该内容只影响 Agent 的叙事上下文，不参与动作合法性、数值判定或状态写入；HP、背包、位置、任务等结构化事实仍必须来自 SQLite/Pydantic 契约。
 
 ### `config/rag_import_rules.json`
 
@@ -233,15 +264,32 @@ bindings:
 
 更完整的契约回归清单见 `MANUAL_TEST_GUIDE.md`。
 
+## 已知限制
+
+- `config/agent_model_config.yml` 中的 `web_api.turn_timeout_seconds` 当前只是配置记录；Web 回合超时仍以 `web_api/service.py` 中的 `TURN_TIMEOUT_SECONDS = 180` 为准。
+- A1 Web 页面直接暴露 `并入主线` / `回滚沙盒` 按钮，但普通新会话默认不是沙盒分支。沙盒能力仍是实验功能，必须先明确创建或进入沙盒分支，并验证 Shadow 状态存在后再测试合并或回滚。
+
 ## 文档入口
 
 - 玩家游玩指南：`PLAY_GUIDE.md`
 
-## 目录结构
+## 主要目录与入口
 
-- `web_api/`：Flask 契约 API + `/play` 页面
-- `game_workflows/`：主循环与外环工作流桥接
 - `agents/`：智能体（NLU/GM/演化等）
-- `state/`：数据契约与 SQLite 持久化工具
-- `tools/`：确定性工具与 RAG 相关工具
+- `config/`：RAG、Agent 模型、主循环规则、MOD 注册表等配置
+- `core/`：中央事件总线与运行日志基础设施
+- `game_workflows/`：主循环、外环工作流桥接、RAG 只读桥和场景辅助逻辑
+- `state/`：Pydantic 数据契约、种子数据、SQLite 初始化与运行期 schema
+- `tools/`：确定性工具、RAG 导入、MOD 管理、日志验收和补偿重放工具
+- `web_api/`：Flask 契约 API、蓝图和 `/play` 页面入口
 - `mods/`：MOD 扩展与脚本
+- `static/`：Web Demo 前端脚本与样式
+- `templates/`：Flask 页面模板
+- `tests/`：pytest 回归测试
+- `docs/`：本地规则书/设定文档输入目录，默认被 Git 忽略
+- `knowledge_base/`：RAG 向量/图谱索引输出目录
+- `.agent_context/`：本地 Agent 上下文规范与长期叙事摘要，运行时只读挂载到 `SceneSnapshot.recent_memory`
+- `.code_md/`：宏观架构设计文档
+- `.coding_docs/`：微观实现记录
+- `app.py`：Flask 开发服务启动入口
+- `pyproject.toml`：项目元数据、打包配置和 lint/type-check 配置

@@ -10,10 +10,12 @@ import logging
 import random
 from collections.abc import Callable
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, cast
 
 from langgraph.graph import END, StateGraph
 
+from agents.agent_context import load_agent_memory, merge_recent_memory
 from agents.clarifier_agent import ClarifierAgent
 from agents.gm_agent import GMAgent
 from agents.nlu_agent import NLUAgent
@@ -102,10 +104,11 @@ class MainEventLoop:
         outer_bridge: OuterLoopBridge | None = None,
         db_updater: DBUpdater | None = None,
         entity_probes: EntityProbes | None = None,
+        agent_context_dir: str | Path | None = None,
     ):
         """
         功能：初始化对象状态与依赖。
-        入参：event_bus；rag_bridge；outer_bridge；db_updater；entity_probes。
+        入参：event_bus；rag_bridge；outer_bridge；db_updater；entity_probes；agent_context_dir。
         出参：无显式返回值约束（见调用方约定）。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
@@ -116,6 +119,7 @@ class MainEventLoop:
         self.gm_agent = GMAgent(event_bus=event_bus, rules=self.rules)
         self.db_updater = db_updater or DBUpdater()
         self.entity_probes = entity_probes or EntityProbes(db_path=self.db_updater.db_path)
+        self.agent_context_dir = agent_context_dir
         rag_rules = self.rules.get("rag", {})
         self.rag_bridge = rag_bridge or RAGReadOnlyBridge(
             enabled=bool(rag_rules.get("read_only_enabled", True)),
@@ -550,6 +554,10 @@ class MainEventLoop:
             initial_character_id = request_context.character_id
             is_sandbox_mode = request_context.sandbox_mode
             recent_memory = request_context.recent_memory
+        agent_memory = load_agent_memory(self.agent_context_dir)
+        # 上下文挂载边界：`.agent_context` 只读补充 Agent 长期记忆，
+        # 不写回 Web 会话摘要，也不参与动作合法性和确定性结算。
+        recent_memory = merge_recent_memory(recent_memory, agent_memory)
         active_character = self._build_character_state(
             initial_character_id,
             use_shadow=is_sandbox_mode,

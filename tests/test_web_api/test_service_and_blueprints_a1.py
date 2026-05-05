@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from flask import Flask
 
+from game_workflows.async_watchers import NoOpOuterLoopBridge, WorkflowOuterLoopBridge
 from state.tools.runtime_schema import ensure_runtime_tables
 from web_api.blueprints.memory import memory_blueprint
 from web_api.blueprints.runtime import runtime_blueprint
@@ -24,6 +25,7 @@ from web_api.service import (
     ensure_character_available,
     get_play_state,
     get_runtime_context,
+    initialize_runtime,
     log_post_body,
     now_iso,
     run_turn,
@@ -240,6 +242,65 @@ def test_sessions_create_and_get_detail(api_client) -> None:
     assert detail_resp.status_code == 200
     assert detail_body["session_id"] == create_body["session_id"]
     assert detail_body["active_character"]["id"] == "player_01"
+
+
+def test_initialize_runtime_uses_configured_workflow_outer_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能：验证 Web 初始化不显式禁用外环事件，而是复用 MainEventLoop 的默认 workflow 桥。
+    入参：monkeypatch。
+    出参：None。
+    异常：断言失败表示 API 路径会把 outer.emitted 固定降级为 noop/skipped。
+    """
+
+    class _FakeEventBus:
+        """
+        功能：替代真实事件总线，避免初始化测试加载 MOD。
+        入参：任意位置/关键字参数。
+        出参：_FakeEventBus。
+        异常：无。
+        """
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            """
+            功能：接受生产构造参数但不执行文件系统扫描。
+            入参：*args/**kwargs：生产 EventBus 参数，测试中忽略。
+            出参：None。
+            异常：无。
+            """
+            return None
+
+    class _FakeMainEventLoop:
+        """
+        功能：记录 Web 初始化传入的 outer_bridge，并模拟 MainEventLoop 默认 workflow 选择。
+        入参：event_bus（_FakeEventBus）：事件总线；outer_bridge（Any | None）：可选外环桥。
+        出参：_FakeMainEventLoop。
+        异常：无。
+        """
+
+        def __init__(self, event_bus: Any, outer_bridge: Any | None = None) -> None:
+            """
+            功能：保留构造入参并在未显式传桥时创建 WorkflowOuterLoopBridge。
+            入参：event_bus（Any）：事件总线；outer_bridge（Any | None，默认 None）：外环桥。
+            出参：None。
+            异常：无。
+            """
+            self.event_bus = event_bus
+            self.received_outer_bridge = outer_bridge
+            self.outer_bridge = outer_bridge or WorkflowOuterLoopBridge()
+
+    monkeypatch.setattr("web_api.service._ensure_runtime_ready", lambda: None)
+    monkeypatch.setattr("web_api.service.EventBus", _FakeEventBus)
+    monkeypatch.setattr("web_api.service.MainEventLoop", _FakeMainEventLoop)
+
+    app = Flask(__name__)
+    initialize_runtime(app)
+    main_loop = app.extensions["tre_api_context"].main_loop
+
+    assert main_loop.received_outer_bridge is None
+    assert isinstance(main_loop.outer_bridge, WorkflowOuterLoopBridge)
+    assert not isinstance(main_loop.outer_bridge, NoOpOuterLoopBridge)
 
 
 def test_memory_routes_cover_summary_raw_and_refresh(api_client) -> None:
