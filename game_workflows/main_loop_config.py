@@ -84,6 +84,10 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
         "auto_initialize": True,
         "query_template": "玩家[{active_character_id}]输入：{user_input}",
     },
+    "memory": {
+        "summary_step": 0,
+        "summary_context_size": 20,
+    },
     "outer_loop": {
         "default_bridge": "workflow",
         "emit_world_evolution": True,

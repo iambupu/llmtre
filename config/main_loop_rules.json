@@ -72,6 +72,10 @@
     "auto_initialize": true,
     "query_template": "玩家[{active_character_id}]输入：{user_input}"
   },
+  "memory": {
+    "summary_step": 4,
+    "summary_context_size": 20
+  },
   "outer_loop": {
     "default_bridge": "workflow",
     "emit_world_evolution": true,

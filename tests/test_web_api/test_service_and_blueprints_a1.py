@@ -21,7 +21,9 @@ from web_api.service import (
     _ensure_runtime_schema_ready,
     _ensure_vector_index_ready,
     _load_item_catalog,
+    _load_turn_timeout_seconds,
     build_initial_turn_payload,
+    build_memory,
     ensure_character_available,
     get_play_state,
     get_runtime_context,
@@ -887,6 +889,40 @@ def test_ensure_vector_index_ready_degrades_when_docstore_missing_after_update(
     assert "向量库初始化后仍未生成 docstore.json" in caplog.text
 
 
+def test_ensure_vector_index_ready_skips_update_when_auto_initialize_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    功能：验证 `rag.auto_initialize=false` 且索引缺失时，不触发 update_index 并记录降级日志。
+    入参：monkeypatch；caplog。
+    出参：None。
+    异常：断言失败表示 RAG 自动初始化开关未生效。
+    """
+    state = {"updated": False}
+
+    class _FakeRAGManager:
+        def update_index(self) -> None:
+            """
+            功能：测试桩，若被调用则标记异常路径命中。
+            入参：无。
+            出参：None。
+            异常：无。
+            """
+            state["updated"] = True
+
+    monkeypatch.setattr("web_api.service.os.path.exists", lambda _path: False)
+    monkeypatch.setattr(
+        "web_api.service.load_main_loop_rules",
+        lambda: {"rag": {"auto_initialize": False}},
+    )
+    monkeypatch.setattr("tools.rag.RAGManager", _FakeRAGManager)
+    caplog.set_level(logging.INFO, logger="WebAPI.Runtime")
+    _ensure_vector_index_ready()
+    assert state["updated"] is False
+    assert "rag.auto_initialize=false" in caplog.text
+
+
 def test_ensure_vector_index_ready_degrades_when_update_index_raises(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -908,6 +944,66 @@ def test_ensure_vector_index_ready_degrades_when_update_index_raises(
     _ensure_vector_index_ready()
     assert "向量库初始化失败，已降级为无 RAG 只读上下文" in caplog.text
 
+
+def test_load_turn_timeout_seconds_uses_config_and_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    功能：验证回合超时读取逻辑在合法配置、越界配置和读取异常下的返回值与日志行为。
+    入参：monkeypatch；caplog。
+    出参：None。
+    异常：断言失败表示 web_api.turn_timeout_seconds 运行时配置未正确生效。
+    """
+    monkeypatch.setattr("web_api.service.TURN_TIMEOUT_SECONDS", 180)
+    monkeypatch.setattr(
+        "web_api.service.load_agent_model_config",
+        lambda: {"web_api": {"turn_timeout_seconds": 240}},
+    )
+    assert _load_turn_timeout_seconds() == 240
+
+    caplog.set_level(logging.WARNING, logger="WebAPI.Runtime")
+    monkeypatch.setattr(
+        "web_api.service.load_agent_model_config",
+        lambda: {"web_api": {"turn_timeout_seconds": 5}},
+    )
+    assert _load_turn_timeout_seconds() == 180
+    assert "turn_timeout_seconds 超出范围" in caplog.text
+
+    monkeypatch.setattr(
+        "web_api.service.load_agent_model_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config_error")),
+    )
+    assert _load_turn_timeout_seconds() == 180
+    assert "读取 agent_model_config.yml 失败" in caplog.text
+
+
+def test_build_memory_uses_summary_step_and_context_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能：验证记忆构建会按 `memory.summary_context_size` 截窗，并按 `memory.summary_step` 分段摘要。
+    入参：monkeypatch。
+    出参：None。
+    异常：断言失败表示记忆构建配置行为回归。
+    """
+    monkeypatch.setattr(
+        "web_api.service.load_main_loop_rules",
+        lambda: {"memory": {"summary_step": 2, "summary_context_size": 4}},
+    )
+    turns = [
+        {"session_turn_id": 1, "user_input": "a1", "final_response": "r1"},
+        {"session_turn_id": 2, "user_input": "a2", "final_response": "r2"},
+        {"session_turn_id": 3, "user_input": "a3", "final_response": "r3"},
+        {"session_turn_id": 4, "user_input": "a4", "final_response": "r4"},
+        {"session_turn_id": 5, "user_input": "a5", "final_response": "r5"},
+    ]
+    summary, items = build_memory(turns, max_turns=20)
+    assert "第2-3回合阶段摘要" in summary
+    assert "第4-5回合阶段摘要" in summary
+    assert len(items) == 2
+    assert items[0]["session_turn_id"] == 3
+    assert items[1]["session_turn_id"] == 5
 
 def test_run_turn_postprocess_malformed_result_records_failed_trace_stages(
     monkeypatch: pytest.MonkeyPatch,

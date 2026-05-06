@@ -286,7 +286,7 @@ def test_mod_manager_registers_new_mod_from_empty_registry(
         {
             "mod_id": "new_mod",
             "name": "New Mod",
-            "enabled": True,
+            "enabled": False,
             "priority": 70,
             "conflict_strategy": "smart_merge",
             "allowed_fields": [],

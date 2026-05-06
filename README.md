@@ -17,16 +17,10 @@
 ### 1. 环境与依赖
 
 - Python：`3.14+`
-- 安装依赖：
+- 安装依赖（推荐统一使用 requirements 锁定依赖图）：
 
 ```bash
 pip install -r requirements.txt
-```
-
-开发时推荐在仓库根目录以源码方式运行命令。若需要按 Python 包方式进行可编辑安装，可执行：
-
-```bash
-pip install -e .
 ```
 
 ### 2. 配置模型（可选但推荐）
@@ -200,7 +194,7 @@ bindings:
     llm_profile: null
 ```
 
-如果 RAG 索引不存在，启动时仍可能触发向量索引初始化，embedding 配置也可能依赖 Ollama。纯确定性验收时建议先准备好索引，或在 `config/main_loop_rules.json` 中临时关闭：
+如果 RAG 索引不存在，启动时是否自动初始化由 `config/main_loop_rules.json` 的 `rag.auto_initialize` 决定。纯确定性验收时可显式关闭该开关：
 
 ```json
 {
@@ -220,7 +214,9 @@ bindings:
 - `nlu.target_aliases` / `location_aliases` / `item_aliases`：目标、地点、物品别名。
 - `resolution`：确定性结算规则，例如攻击 DC、伤害骰、移动消耗、休息恢复。
 - `rag.read_only_enabled`：主循环是否读取 RAG 上下文。
-- `rag.auto_initialize`：是否允许运行时自动初始化 RAG。
+- `rag.auto_initialize`：向量索引缺失时是否允许运行时自动初始化 RAG。
+- `memory.summary_step`：记忆构建达到指定回合步长后，按阶段摘要进行压缩；`0` 表示不压缩。
+- `memory.summary_context_size`：记忆构建时读取的最大上下文回合窗口。
 - `outer_loop`：外环事件投递、补偿重放、超时、世界演化时间步长。
 - `scene_defaults`：缺省场景、可用行动、建议行动。
 - `narrative_templates`：模型不可用或确定性渲染时使用的叙事模板。
@@ -266,8 +262,10 @@ bindings:
 
 ## 已知限制
 
-- `config/agent_model_config.yml` 中的 `web_api.turn_timeout_seconds` 当前只是配置记录；Web 回合超时仍以 `web_api/service.py` 中的 `TURN_TIMEOUT_SECONDS = 180` 为准。
 - A1 Web 页面直接暴露 `并入主线` / `回滚沙盒` 按钮，但普通新会话默认不是沙盒分支。沙盒能力仍是实验功能，必须先明确创建或进入沙盒分支，并验证 Shadow 状态存在后再测试合并或回滚。
+- 任务脚本判定链路存在明确 `exec(code, safe_globals, context)` 执行路径：
+  - `tools/quest/quest_manager.py` -> `tools/sandbox/script_evaluator.py`
+  - 当前仅做受限内置对象裁剪，不能视作可信安全边界；生产环境需将“脚本来源可信”作为硬前提。
 
 ## 文档入口
 

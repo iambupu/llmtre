@@ -14,10 +14,12 @@ from typing import Any, Literal, cast
 
 from flask import Flask, current_app, jsonify, request
 
+from config.agent_model_loader import load_agent_model_config
 from core.event_bus import EventBus
 from game_workflows.affordances import build_scene_interaction_model
 from game_workflows.async_watchers import NoOpOuterLoopBridge
 from game_workflows.main_event_loop import MainEventLoop
+from game_workflows.main_loop_config import load_main_loop_rules
 from state.contracts.turn import TurnRequestContext, TurnTrace, TurnTraceStage
 from state.tools.db_initializer import DB_PATH, DBInitializer
 from state.tools.runtime_schema import ensure_runtime_tables
@@ -42,6 +44,31 @@ DEFAULT_MEMORY_TURNS = 20
 MIN_MEMORY_TURNS = 5
 MAX_MEMORY_TURNS = 100
 logger = logging.getLogger("WebAPI.Runtime")
+
+
+def _load_turn_timeout_seconds() -> int:
+    """
+    功能：读取 Web 回合超时配置；缺失或非法时降级到默认值 180 秒。
+    入参：无。
+    出参：int，回合超时秒数，约束在 30..600 之间。
+    异常：配置读取异常时内部捕获并降级，不阻断服务启动。
+    """
+    try:
+        config = load_agent_model_config()
+    except Exception as error:  # noqa: BLE001
+        logger.warning("读取 agent_model_config.yml 失败，回合超时降级默认值: %s", str(error))
+        return TURN_TIMEOUT_SECONDS
+    web_api_cfg = config.get("web_api", {}) if isinstance(config, dict) else {}
+    timeout_raw = web_api_cfg.get("turn_timeout_seconds", TURN_TIMEOUT_SECONDS)
+    if not isinstance(timeout_raw, int):
+        return TURN_TIMEOUT_SECONDS
+    if 30 <= timeout_raw <= 600:
+        return timeout_raw
+    logger.warning(
+        "web_api.turn_timeout_seconds 超出范围，已降级默认值: value=%s",
+        timeout_raw,
+    )
+    return TURN_TIMEOUT_SECONDS
 
 
 class TurnExecutionError(RuntimeError):
@@ -148,6 +175,14 @@ def _ensure_vector_index_ready() -> None:
     """
     if os.path.exists(VECTOR_DOCSTORE_PATH):
         return
+    rag_cfg = load_main_loop_rules().get("rag", {})
+    auto_initialize = bool(rag_cfg.get("auto_initialize", True))
+    if not auto_initialize:
+        logger.info(
+            "检测到向量库缺失，但 rag.auto_initialize=false，"
+            "跳过自动索引初始化并降级为无 RAG 上下文。"
+        )
+        return
     logger.warning("检测到向量库缺失，开始自动初始化 RAG 索引。")
     try:
         from tools.rag import RAGManager
@@ -180,6 +215,9 @@ def initialize_runtime(app: Flask) -> None:
     # Web 层不显式覆盖外环桥，避免 API 路径把 state_changed/turn_ended 投递降级为 noop。
     context.main_loop = MainEventLoop(event_bus=event_bus)
     app.extensions["tre_api_context"] = context
+    global TURN_TIMEOUT_SECONDS
+    TURN_TIMEOUT_SECONDS = _load_turn_timeout_seconds()
+    logger.info("Web API 回合超时配置生效: turn_timeout_seconds=%s", TURN_TIMEOUT_SECONDS)
 
 
 def get_runtime_context() -> ApiRuntimeContext:
@@ -362,16 +400,75 @@ def build_memory(turns: list[dict[str, Any]], max_turns: int) -> tuple[str, list
     出参：tuple[str, list[dict[str, Any]]]，分别为摘要文本和结构化片段。
     异常：无显式异常；字段缺失时按空值降级。
     """
-    recent = turns[-max_turns:]
+    memory_cfg = load_main_loop_rules().get("memory", {})
+    context_window_raw = memory_cfg.get("summary_context_size", max_turns)
+    summary_step_raw = memory_cfg.get("summary_step", 0)
+    context_window = (
+        context_window_raw
+        if isinstance(context_window_raw, int) and context_window_raw > 0
+        else max_turns
+    )
+    summary_step = (
+        summary_step_raw
+        if isinstance(summary_step_raw, int) and summary_step_raw >= 2
+        else 0
+    )
+    recent = turns[-min(max_turns, context_window) :]
     items: list[dict[str, Any]] = []
     lines: list[str] = []
-    for turn in recent:
+
+    def _to_line(turn: dict[str, Any]) -> tuple[int, str]:
         turn_id = int(turn.get("session_turn_id", turn.get("turn_id", 0)))
         user_input = str(turn.get("user_input", ""))
         final_response = str(turn.get("final_response", ""))
         line = f"第{turn_id}回合：输入[{user_input}] -> 响应[{final_response}]"
-        lines.append(line)
-        items.append({"session_turn_id": turn_id, "text": line})
+        return turn_id, line
+
+    if summary_step == 0:
+        for turn in recent:
+            turn_id, line = _to_line(turn)
+            lines.append(line)
+            items.append({"session_turn_id": turn_id, "text": line})
+        return "\n".join(lines), items
+
+    # 事务边界：仅做只读拼接；不依赖外部状态写入，失败可降级到逐条拼接。
+    try:
+        total = len(recent)
+        summarized_tail_start = total - (total % summary_step)
+        for start in range(0, summarized_tail_start, summary_step):
+            chunk = recent[start : start + summary_step]
+            if not chunk:
+                continue
+            chunk_start_turn = int(chunk[0].get("session_turn_id", chunk[0].get("turn_id", 0)))
+            chunk_end_turn = int(chunk[-1].get("session_turn_id", chunk[-1].get("turn_id", 0)))
+            inputs = [
+                str(turn.get("user_input", ""))
+                for turn in chunk
+                if str(turn.get("user_input", ""))
+            ]
+            responses = [
+                str(turn.get("final_response", ""))
+                for turn in chunk
+                if str(turn.get("final_response", ""))
+            ]
+            compact_inputs = "；".join(inputs[:3])
+            compact_responses = "；".join(responses[:2])
+            summary_line = (
+                f"第{chunk_start_turn}-{chunk_end_turn}回合阶段摘要："
+                f"玩家动作[{compact_inputs}]；系统反馈[{compact_responses}]"
+            )
+            lines.append(summary_line)
+            items.append({"session_turn_id": chunk_end_turn, "text": summary_line})
+        # 不足一个步长的尾部保留原始逐条细节，避免最新上下文过度压缩。
+        for turn in recent[summarized_tail_start:]:
+            turn_id, line = _to_line(turn)
+            lines.append(line)
+            items.append({"session_turn_id": turn_id, "text": line})
+    except Exception:  # noqa: BLE001
+        for turn in recent:
+            turn_id, line = _to_line(turn)
+            lines.append(line)
+            items.append({"session_turn_id": turn_id, "text": line})
     return "\n".join(lines), items
 
 
@@ -532,7 +629,7 @@ def run_turn(
         narrative_stream_callback（Callable[[str], None] | None，默认 None）：GM 叙事片段回调；
         trace_id（str | None，默认 None）：请求级追踪号；request_id（str，默认空）：幂等键。
     出参：dict[str, Any]，包含回合号、动作与叙事结果的负载。
-    异常：主循环异常或超过 TURN_TIMEOUT_SECONDS（当前 180 秒）时向上抛出；
+    异常：主循环异常或超过 TURN_TIMEOUT_SECONDS（来自 `agent_model_config.yml`）时向上抛出；
         调用方负责转换为玩家可见的 API 或 SSE 错误响应。
     """
     context = get_runtime_context()

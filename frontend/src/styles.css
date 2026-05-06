@@ -1,0 +1,100 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Microsoft YaHei UI", sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.layout {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+.topbar {
+  padding: 12px;
+  border-bottom: 1px solid #334155;
+  background: #111827;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.card, .debug {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #111827;
+  padding: 12px;
+  min-height: 200px;
+}
+
+.debug {
+  margin: 0 12px 12px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+input, select, button {
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+button {
+  cursor: pointer;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0f172a;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.msg {
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.msg p {
+  margin: 6px 0 0;
+}
+
+.msg-player { border-color: #0ea5e9; }
+.msg-gm { border-color: #22c55e; }
+.msg-error { border-color: #ef4444; }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}

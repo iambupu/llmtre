@@ -14,7 +14,7 @@
 *.pyc
 *__pycache__*
 .mypy_cache/
-.pytest_cache/
+.pytest*/
 .ruff_cache/
 .coverage
 coverage.xml
@@ -24,6 +24,18 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+*.tsbuildinfo
+
+# 前端本地依赖与缓存
+/frontend/node_modules/
+/frontend/.vite/
+/frontend/coverage/
+/frontend/dist/
+/frontend/playwright-report/
+/frontend/test-results/
+/frontend/.eslintcache
+/frontend/vite.config.js
+/frontend/vite.config.d.ts
 
 # 本地环境与编辑器配置
 .env
@@ -40,3 +52,6 @@ dist/
 /code_review.md
 /.code_md/
 /.coding_docs/
+
+# 本地临时目录
+/tmp_pytest*/

@@ -69,11 +69,11 @@ class ModManager:
                 # 3. 如果是新发现的 MOD，追加到注册表
                 if mod_id not in existing_mod_ids:
                     logger.info(f"发现新 MOD: {mod_id}")
-                    # 生成默认配置条目
+                    # 生成默认配置条目：新发现 MOD 默认禁用，避免未审计脚本直接进入运行链路。
                     new_entry = {
                         "mod_id": mod_id,
                         "name": mod_info.get("name", mod_id),
-                        "enabled": True,
+                        "enabled": False,
                         "priority": mod_info.get("load_priority", 50),  # 默认优先级 50
                         "conflict_strategy": "smart_merge",
                         "allowed_fields": [],  # 为空表示允许所有字段

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Text RPG Engine - Deterministic Logic First TRPG Framework"
 readme = "README.md"
 requires-python = ">=3.14"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-only"}
 authors = [
     {name = "TRE Team"}
 ]
@@ -16,7 +16,7 @@ keywords = ["trpg", "rpg", "game-engine", "langgraph", "llm", "text-adventure"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3.14",
     "Topic :: Games/Entertainment",
 ]
@@ -51,9 +51,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/llmtre"
-Documentation = "https://github.com/llmtre/docs"
-Repository = "https://github.com/llmtre"
+Homepage = "https://github.com/iambupu/llmtre"
+Documentation = "https://github.com/iambupu/llmtre/tree/main/.code_md"
+Repository = "https://github.com/iambupu/llmtre"
 
 [tool.setuptools.packages.find]
 include = ["game_workflows*", "state*", "web_api*", "config*", "agents*", "tools*", "core*"]

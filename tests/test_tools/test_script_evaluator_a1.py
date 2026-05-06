@@ -31,48 +31,47 @@ class _FakeLLM:
         return self.response
 
 
-def test_python_condition_allows_safe_builtins_and_mutates_context() -> None:
+def test_python_condition_allows_safe_expression_eval() -> None:
     """
-    功能：验证 Python 判定允许安全内置函数，并通过 result 返回布尔结果。
+    功能：验证表达式判定可读取上下文并返回布尔结果。
     入参：无。
     出参：None。
     异常：断言失败表示安全执行环境或返回值标准化回归。
     """
-    context = {"values": [1, 2, 3]}
+    context = {"hp": 9, "mp": 3}
     evaluator = ScriptEvaluator()
 
     ok = evaluator.evaluate_python_condition(
-        "result = all(v > 0 for v in values) and sum(values) == 6",
+        "hp > 0 and mp >= 3",
         context,
     )
 
     assert ok is True
-    assert context["result"] is True
 
 
 def test_python_condition_defaults_false_without_result() -> None:
     """
-    功能：验证脚本未写入 result 时标准化为 False。
+    功能：验证表达式为假时标准化返回 False。
     入参：无。
     出参：None。
     异常：断言失败表示 result 缺失降级回归。
     """
-    assert ScriptEvaluator().evaluate_python_condition("value = 1", {}) is False
+    assert ScriptEvaluator().evaluate_python_condition("1 > 2", {}) is False
 
 
 def test_python_condition_rejects_unsafe_import_and_logs_error(caplog) -> None:
     """
-    功能：验证受限 builtins 会拒绝 import，并记录错误日志。
+    功能：验证不允许语句级语法（如 import），并记录错误日志。
     入参：caplog。
     出参：None。
     异常：断言失败表示脚本异常捕获或日志证据回归。
     """
     with caplog.at_level(logging.ERROR, logger="ScriptEvaluator"):
-        ok = ScriptEvaluator().evaluate_python_condition("import os\nresult = True", {})
+        ok = ScriptEvaluator().evaluate_python_condition("__import__('os')", {})
 
     assert ok is False
     assert "Python 脚本执行失败" in caplog.text
-    assert "import os" in caplog.text
+    assert "__import__" in caplog.text
 
 
 def test_llm_condition_without_llm_logs_warning_and_returns_false(caplog) -> None:
