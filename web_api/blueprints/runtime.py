@@ -60,11 +60,12 @@ def reset_session(session_id: str) -> tuple[Any, int]:
         fresh_session = get_session(session_id)
         if fresh_session is None:
             return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
-        if context.main_loop is None:
-            return error("INTERNAL_ERROR", "主循环未初始化", 500)
-        db_updater = context.main_loop.db_updater
         # 会话处于沙盒模式时，reset 必须由租约 owner 执行，防止误删其他会话沙盒。
         if bool(fresh_session.get("sandbox_mode", False)):
+            main_loop = getattr(context, "main_loop", None)
+            if main_loop is None:
+                return error("INTERNAL_ERROR", "主循环未初始化", 500)
+            db_updater = main_loop.db_updater
             if not db_updater.is_sandbox_owner(session_id=session_id):
                 return error(
                     "SANDBOX_OWNER_MISMATCH",

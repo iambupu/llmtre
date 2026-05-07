@@ -133,7 +133,26 @@ def turns_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[Flask]:
             "quick_actions": ["继续观察", "等待片刻"],
             "affordances": [],
             "is_sandbox_mode": bool(sandbox_mode),
-            "active_character": {"id": character_id, "inventory": []},
+            "active_character": {
+                "id": character_id,
+                "inventory": [],
+                "state_flags": ["observed_surroundings"],
+                "status_summary": "警觉观察",
+                "status_effects": [
+                    {
+                        "key": "observed_surroundings",
+                        "label": "警觉观察",
+                        "kind": "awareness",
+                        "severity": "info",
+                        "description": "角色正在留意周围细节。",
+                    }
+                ],
+                "status_context": {
+                    "resource_state": "stable",
+                    "flags": ["observed_surroundings"],
+                    "prompt_text": "警觉观察(info): 角色正在留意周围细节。",
+                },
+            },
             "scene_snapshot": {
                 "schema_version": "scene_snapshot.v2",
                 "current_location": {"id": "loc_a", "name": "测试地点", "description": "desc"},
@@ -316,6 +335,17 @@ def test_create_turn_and_stream_done_payload_isomorphic(turns_client) -> None:
     assert core_keys.issubset(done_body.keys())
     assert normal_body["outcome"] == done_body["outcome"] == "valid_action"
     assert normal_body["runtime_turn_id"] == done_body["runtime_turn_id"] == 99
+    for body in (normal_body, done_body):
+        active_character = body["active_character"]
+        assert "status_summary" in active_character
+        assert "status_effects" in active_character
+        assert "state_flags" in active_character
+        assert "status_context" in active_character
+        gm_stage = next(
+            stage for stage in body["trace"]["stages"] if stage["stage"] == "gm.rendered"
+        )
+        assert "status_summary" in gm_stage["detail"]
+        assert "status_effects_count" in gm_stage["detail"]
 
 
 def test_create_turn_error_keeps_run_turn_trace_id(

@@ -36,6 +36,7 @@ dist/
 /frontend/.eslintcache
 /frontend/vite.config.js
 /frontend/vite.config.d.ts
+/frontend/stream_debug*.txt
 
 # 本地环境与编辑器配置
 .env

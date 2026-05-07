@@ -3,11 +3,18 @@ from __future__ import annotations
 import copy
 import json
 import os
+from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
 
+import yaml
+
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RULES_PATH = os.path.join(BASE_DIR, "config", "main_loop_rules.json")
+MOD_REGISTRY_PATH = os.path.join(BASE_DIR, "config", "mod_registry.yml")
+MODS_ROOT = os.path.join(BASE_DIR, "mods")
+SCENARIO_RULES_ENV = "LLMTRE_SCENARIO_RULES_PATH"
+EXTRA_RULES_ENV = "LLMTRE_MAIN_LOOP_RULES_EXTRA"
 
 DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
     "nlu": {
@@ -88,6 +95,75 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
         "summary_step": 0,
         "summary_context_size": 20,
     },
+    "character_status": {
+        "stable_summary": "状态稳定",
+        "resource_thresholds": {
+            "hp_critical_ratio": 0.25,
+            "hp_wounded_ratio": 0.5,
+            "mp_low_ratio": 0.25,
+        },
+        "resource_effects": {
+            "hp_critical": {
+                "key": "hp_critical",
+                "label": "濒危",
+                "kind": "resource",
+                "severity": "critical",
+                "description": "生命值极低，行动叙事应体现明显危险。",
+            },
+            "hp_wounded": {
+                "key": "hp_wounded",
+                "label": "受伤",
+                "kind": "resource",
+                "severity": "warning",
+                "description": "生命值低于安全线，行动叙事应体现体力受损。",
+            },
+            "mp_low": {
+                "key": "mp_low",
+                "label": "法力不足",
+                "kind": "resource",
+                "severity": "warning",
+                "description": "法力值较低，施法或持续行动应显得吃力。",
+            },
+        },
+        "flags": {
+            "moved_recently": {
+                "label": "刚刚移动",
+                "kind": "activity",
+                "severity": "info",
+                "description": "角色刚完成位置变更，叙事可承接位移后的观察。",
+            },
+            "conversation_started": {
+                "label": "交谈中",
+                "kind": "social",
+                "severity": "info",
+                "description": "角色已进入对话节奏，叙事可承接 NPC 反馈。",
+            },
+            "observed_surroundings": {
+                "label": "警觉观察",
+                "kind": "awareness",
+                "severity": "info",
+                "description": "角色正在留意周围细节，叙事可强调环境线索。",
+            },
+            "waited_recently": {
+                "label": "短暂停留",
+                "kind": "activity",
+                "severity": "info",
+                "description": "角色刚刚等待片刻，叙事可体现时间流逝。",
+            },
+            "sandbox_merged": {
+                "label": "沙盒已并入",
+                "kind": "sandbox",
+                "severity": "info",
+                "description": "沙盒剧情已进入主线。",
+            },
+            "sandbox_discarded": {
+                "label": "沙盒已回滚",
+                "kind": "sandbox",
+                "severity": "info",
+                "description": "沙盒剧情已被放弃并回到主线状态。",
+            },
+        },
+    },
     "outer_loop": {
         "default_bridge": "workflow",
         "emit_world_evolution": True,
@@ -143,23 +219,177 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 @lru_cache(maxsize=1)
-def load_main_loop_rules(path: str = RULES_PATH) -> dict[str, Any]:
+def _load_main_loop_rules_cached(
+    path: str,
+    override_paths: tuple[str, ...],
+    signature: str,
+) -> dict[str, Any]:
     """
-    功能：加载配置或数据资源。
-    入参：path。
-    出参：dict[str, Any]。
-    异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+    功能：在稳定签名下缓存并组装主循环规则，避免每回合重复读取磁盘。
+    入参：path（str）：基础规则文件路径；
+        override_paths（tuple[str, ...]）：按优先级排序的覆盖文件路径；
+        signature（str）：文件签名，驱动缓存失效。
+    出参：dict[str, Any]，合并后的主循环规则。
+    异常：文件读取异常内部降级，不向上抛出；签名仅用于缓存键，不参与逻辑判断。
     """
+    del signature
     rules = copy.deepcopy(DEFAULT_MAIN_LOOP_RULES)
-    if not os.path.exists(path):
-        return rules
+    loaded = _load_json_mapping(path)
+    if loaded:
+        rules = _deep_merge(rules, loaded)
+    for override_path in override_paths:
+        override = _load_json_mapping(override_path)
+        if not override:
+            continue
+        # 事务边界：覆盖仅作用于规则快照，不直接写入世界状态。
+        rules = _deep_merge(rules, override)
+    return rules
 
+
+def _load_json_mapping(path: str) -> dict[str, Any]:
+    """
+    功能：读取 JSON 对象文件并收敛为映射，供规则分层合并复用。
+    入参：path（str）：JSON 文件路径。
+    出参：dict[str, Any]，成功返回对象；失败返回空字典。
+    异常：JSON 语法或 IO 异常内部捕获并降级为空字典。
+    """
+    if not os.path.exists(path):
+        return {}
     try:
         with open(path, encoding="utf-8") as file:
             loaded = json.load(file)
     except (json.JSONDecodeError, OSError):
-        return rules
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
-    if not isinstance(loaded, dict):
-        return rules
-    return _deep_merge(rules, loaded)
+
+def _load_mod_registry() -> dict[str, Any]:
+    """
+    功能：读取 mod_registry.yml，解析当前启用模组清单。
+    入参：无，路径固定为 `config/mod_registry.yml`。
+    出参：dict[str, Any]，成功返回注册表对象；失败返回空字典。
+    异常：YAML 解析或 IO 异常内部捕获并降级为空字典。
+    """
+    if not os.path.exists(MOD_REGISTRY_PATH):
+        return {}
+    try:
+        with open(MOD_REGISTRY_PATH, encoding="utf-8") as file:
+            loaded = yaml.safe_load(file)
+    except (yaml.YAMLError, OSError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _extract_enabled_mod_ids(registry: dict[str, Any]) -> list[str]:
+    """
+    功能：从注册表提取按优先级排序的启用模组 ID 列表。
+    入参：registry（dict[str, Any]）：mod_registry.yml 对象。
+    出参：list[str]，仅包含 `enabled=true` 且有 `mod_id` 的模组。
+    异常：不抛异常；结构异常时返回空列表。
+    """
+    active_mods = registry.get("active_mods", [])
+    if not isinstance(active_mods, list):
+        return []
+    ranked: list[tuple[int, str]] = []
+    for item in active_mods:
+        if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+            continue
+        mod_id = str(item.get("mod_id") or "").strip()
+        if not mod_id:
+            continue
+        priority = int(item.get("priority", 0)) if isinstance(item.get("priority", 0), int) else 0
+        ranked.append((priority, mod_id))
+    ranked.sort(key=lambda pair: pair[0])
+    return [mod_id for _, mod_id in ranked]
+
+
+def _collect_rule_override_paths(path: str) -> list[str]:
+    """
+    功能：收集规则覆盖层路径，顺序为基础文件之后的应用顺序（低优先级在前）。
+    入参：path（str）：基础规则路径，用于避免重复加入同一路径。
+    出参：list[str]，包含启用模组覆盖、剧本覆盖与额外覆盖路径。
+    异常：不抛异常；缺失路径会在后续读取阶段自动跳过。
+    """
+    result: list[str] = []
+    seen: set[str] = {os.path.abspath(path)}
+
+    registry = _load_mod_registry()
+    mod_ids = _extract_enabled_mod_ids(registry)
+    for mod_id in mod_ids:
+        mod_dir = os.path.join(MODS_ROOT, mod_id)
+        candidates = [
+            os.path.join(mod_dir, "main_loop_rules.override.json"),
+            os.path.join(mod_dir, "rules", "main_loop_rules.override.json"),
+            os.path.join(mod_dir, "rules", "main_loop_rules.json"),
+        ]
+        for candidate in candidates:
+            abs_candidate = os.path.abspath(candidate)
+            if abs_candidate in seen:
+                continue
+            seen.add(abs_candidate)
+            result.append(abs_candidate)
+
+    scenario_path = str(os.getenv(SCENARIO_RULES_ENV, "")).strip()
+    if scenario_path:
+        abs_scenario = os.path.abspath(scenario_path)
+        if abs_scenario not in seen:
+            seen.add(abs_scenario)
+            result.append(abs_scenario)
+
+    extra_paths_raw = str(os.getenv(EXTRA_RULES_ENV, "")).strip()
+    if extra_paths_raw:
+        for extra in [entry.strip() for entry in extra_paths_raw.split(";") if entry.strip()]:
+            abs_extra = os.path.abspath(extra)
+            if abs_extra in seen:
+                continue
+            seen.add(abs_extra)
+            result.append(abs_extra)
+    return result
+
+
+def _build_rules_signature(paths: Iterable[str]) -> str:
+    """
+    功能：基于路径元数据构建规则签名，用于缓存失效与热更新感知。
+    入参：paths（Iterable[str]）：所有参与加载的规则路径。
+    出参：str，稳定签名字符串。
+    异常：不抛异常；缺失路径以 `missing` 记录，IO 异常降级为 `error` 标记。
+    """
+    chunks: list[str] = []
+    for path in paths:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            chunks.append(f"{abs_path}:missing")
+            continue
+        try:
+            stat = os.stat(abs_path)
+            chunks.append(f"{abs_path}:{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            chunks.append(f"{abs_path}:error")
+    return "|".join(chunks)
+
+
+def load_main_loop_rules(path: str = RULES_PATH) -> dict[str, Any]:
+    """
+    功能：加载主循环规则，支持“基础规则 + 启用模组覆盖 + 剧本覆盖 + 额外覆盖”分层。
+    入参：path（str）：基础规则路径，默认 `config/main_loop_rules.json`。
+    出参：dict[str, Any]，深度合并后的规则快照。
+    异常：读取失败时内部降级为默认规则，不抛异常阻断主流程。
+    """
+    override_paths = _collect_rule_override_paths(path)
+    signature = _build_rules_signature([path, *override_paths])
+    merged = _load_main_loop_rules_cached(path, tuple(override_paths), signature)
+    return copy.deepcopy(merged)
+
+
+def clear_main_loop_rules_cache() -> None:
+    """
+    功能：清理主循环规则缓存，供测试和配置热更新前置步骤使用。
+    入参：无。
+    出参：None。
+    异常：不抛异常；委托 lru_cache 的 cache_clear 完成内部状态清理。
+    """
+    _load_main_loop_rules_cached.cache_clear()
+
+
+# 兼容契约：历史测试和调用方通过 load_main_loop_rules.cache_clear() 清理规则缓存。
+setattr(load_main_loop_rules, "cache_clear", clear_main_loop_rules_cache)

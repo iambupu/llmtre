@@ -7,11 +7,58 @@ export type ApiFailure = {
   trace?: unknown;
 };
 
+export type CharacterStatusEffect = {
+  key: string;
+  label: string;
+  kind: string;
+  severity: string;
+  description: string;
+};
+
+export type CharacterStatusContext = {
+  resource_state: string;
+  flags: string[];
+  prompt_text: string;
+};
+
+export type ActiveCharacter = Record<string, unknown> & {
+  id?: string;
+  character_id?: string;
+  name?: string;
+  label?: string;
+  hp?: number;
+  max_hp?: number;
+  mp?: number;
+  max_mp?: number;
+  inventory?: unknown[];
+  inventory_items?: unknown[];
+  location?: string;
+  state_flags?: string[];
+  status_summary?: string;
+  status_effects?: CharacterStatusEffect[];
+  status_context?: CharacterStatusContext;
+};
+
 export type SessionPayload = {
   session_id: string;
+  character_id?: string;
   current_session_turn_id?: number;
   sandbox_mode?: boolean;
-  active_character?: Record<string, unknown> | null;
+  quick_actions?: string[];
+  quick_action_candidates?: Array<{
+    canonical_intent_key: string;
+    target_object_hint: string;
+    display_text: string;
+    confidence?: number | null;
+    reason?: string;
+  }>;
+  quick_action_groups?: { current?: string[]; nearby?: string[] };
+  quick_action_layout?: {
+    common_actions?: string[];
+    object_actions?: Record<string, string[]>;
+    diagnostics?: Record<string, unknown>;
+  };
+  active_character?: ActiveCharacter | null;
   scene_snapshot?: SceneSnapshot | null;
   memory_summary?: string;
 };
@@ -75,8 +122,21 @@ export type TurnResult = {
   request_id: string;
   final_response: string;
   quick_actions: string[];
+  quick_action_candidates?: Array<{
+    canonical_intent_key: string;
+    target_object_hint: string;
+    display_text: string;
+    confidence?: number | null;
+    reason?: string;
+  }>;
+  quick_action_groups?: { current?: string[]; nearby?: string[] };
+  quick_action_layout?: {
+    common_actions?: string[];
+    object_actions?: Record<string, string[]>;
+    diagnostics?: Record<string, unknown>;
+  };
   affordances: SceneAffordance[];
-  active_character?: Record<string, unknown> | null;
+  active_character?: ActiveCharacter | null;
   scene_snapshot?: SceneSnapshot | null;
   memory_summary?: string;
   debug_trace?: unknown[];

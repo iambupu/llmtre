@@ -46,6 +46,308 @@ MAX_MEMORY_TURNS = 100
 logger = logging.getLogger("WebAPI.Runtime")
 
 
+def _normalize_quick_action_semantic_key(action: str) -> str:
+    """
+    功能：将快捷动作归一化为语义键，用于合并“检查四周/观察周围”等同义动作。
+    入参：action（str）：原始快捷动作文本。
+    出参：str，语义去重键；空字符串表示不可用动作。
+    异常：不抛异常；任何文本都会降级为稳定字符串键。
+    """
+    normalized = "".join(action.split()).strip()
+    if not normalized:
+        return ""
+    # TODO(A1-quick-action-intent): 这里是规则词表兜底；后续改为 LLM 约束后的意图归一化，
+    # 由模型输出 canonical_intent_key，再回落本地规则，降低同义短句漏判与误判。
+    compact = (
+        normalized.replace("一下", "")
+        .replace("一会", "")
+        .replace("一下子", "")
+        .replace("一下儿", "")
+    )
+    if re.search(
+        r"(检查|观察|查看|看看|环顾|打量|侦查|探查|巡视).*(周围|四周|附近|这里|周遭)",
+        compact,
+    ):
+        return "inspect-surroundings"
+    return compact
+
+
+CANONICAL_INTENT_KEY_WHITELIST: set[str] = {
+    "inspect_local",
+    "observe_local",
+    "wait_local",
+    "rest_local",
+    "move_to_exit",
+    "use_inventory_item",
+    "talk_to_npc",
+    "attack_target",
+    "inspect_object",
+    "generic_action",
+}
+
+
+def _sanitize_quick_action_candidates(raw_candidates: Any) -> list[dict[str, Any]]:
+    """
+    功能：清洗 quick_action_candidates 原始数组，确保结构化字段完整且可用于落桶。
+    入参：raw_candidates（Any）：GM 输出候选，期望为对象列表。
+    出参：list[dict[str, Any]]，每项至少包含 canonical_intent_key/target_object_hint/display_text。
+    异常：不抛异常；字段非法时丢弃单条并继续。
+    """
+    if not isinstance(raw_candidates, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    seen_display: set[str] = set()
+    for item in raw_candidates:
+        if not isinstance(item, dict):
+            continue
+        canonical_key = str(item.get("canonical_intent_key") or "").strip()
+        display_text = str(item.get("display_text") or "").strip()
+        target_hint = str(item.get("target_object_hint") or "").strip()
+        if not canonical_key or not display_text:
+            continue
+        if canonical_key not in CANONICAL_INTENT_KEY_WHITELIST:
+            canonical_key = "generic_action"
+        if display_text in seen_display:
+            continue
+        seen_display.add(display_text)
+        sanitized.append(
+            {
+                "canonical_intent_key": canonical_key,
+                "target_object_hint": target_hint,
+                "display_text": display_text[:40],
+                "confidence": item.get("confidence"),
+                "reason": str(item.get("reason") or "")[:120],
+            }
+        )
+        if len(sanitized) >= 8:
+            break
+    return sanitized
+
+
+def _build_quick_action_groups(
+    scene_snapshot: dict[str, Any],
+    quick_actions: list[str],
+) -> dict[str, list[str]]:
+    """
+    功能：基于场景 affordance 生成“当前场景/临近场景”快捷动作分组，并执行语义去重。
+    入参：scene_snapshot（dict[str, Any]）：当前回合场景快照；
+        quick_actions（list[str]）：GM 输出的回合快捷动作。
+    出参：dict[str, list[str]]，固定包含 current 与 nearby 两组动作。
+    异常：不抛异常；字段缺失时降级为空分组。
+    """
+    current_location = scene_snapshot.get("current_location")
+    current_location_id = (
+        str(current_location.get("id"))
+        if isinstance(current_location, dict) and current_location.get("id") is not None
+        else ""
+    )
+    affordances = scene_snapshot.get("affordances", [])
+    action_bucket_by_text: dict[str, str] = {}
+    if isinstance(affordances, list):
+        for item in affordances:
+            if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+                continue
+            action_text = str(item.get("user_input") or item.get("label") or "").strip()
+            if not action_text:
+                continue
+            target_location_id = str(item.get("location_id") or "").strip()
+            object_id = str(item.get("object_id") or "").strip()
+            is_nearby = (
+                object_id.startswith("exit:")
+                or str(item.get("action_type") or "") == "move"
+                or (
+                    bool(target_location_id)
+                    and target_location_id != current_location_id
+                )
+            )
+            action_bucket_by_text[action_text] = "nearby" if is_nearby else "current"
+
+    groups: dict[str, list[str]] = {"current": [], "nearby": []}
+    seen_keys: dict[str, set[str]] = {"current": set(), "nearby": set()}
+    # 事务边界：分组只接受 enabled affordance 中出现过的动作，未授权文本不进入可点击入口。
+    for raw_action in quick_actions:
+        action_text = str(raw_action).strip()
+        if not action_text:
+            continue
+        bucket = action_bucket_by_text.get(action_text)
+        if bucket is None:
+            continue
+        semantic_key = _normalize_quick_action_semantic_key(action_text)
+        if not semantic_key or semantic_key in seen_keys[bucket]:
+            continue
+        seen_keys[bucket].add(semantic_key)
+        groups[bucket].append(action_text)
+    return groups
+
+
+def _build_quick_action_layout(
+    scene_snapshot: dict[str, Any],
+    quick_actions: list[str],
+    quick_action_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    功能：构造场景快捷操作布局，优先使用结构化候选并由 affordance/slot 约束落桶。
+    入参：scene_snapshot（dict[str, Any]）：当前回合场景快照；
+        quick_actions（list[str]）：GM 返回的回合快捷动作；
+        quick_action_candidates（list[dict[str, Any]] | None）：GM 结构化候选动作。
+    出参：dict[str, Any]，字段为 common_actions、object_actions、diagnostics。
+    异常：不抛异常；字段缺失时返回空布局。
+    """
+    affordances = scene_snapshot.get("affordances", [])
+    if not isinstance(affordances, list):
+        affordances = []
+    interaction_slots = scene_snapshot.get("interaction_slots", [])
+    if not isinstance(interaction_slots, list):
+        interaction_slots = []
+    candidates = _sanitize_quick_action_candidates(quick_action_candidates or [])
+    common_actions: list[str] = []
+    object_actions: dict[str, list[str]] = {}
+    seen_global: set[str] = set()
+    seen_per_object: dict[str, set[str]] = {}
+    matched_by_slot = 0
+    matched_by_text = 0
+    unmatched_actions: list[str] = []
+
+    scene_objects = scene_snapshot.get("scene_objects", [])
+    valid_object_ids: set[str] = set()
+    if isinstance(scene_objects, list):
+        for obj in scene_objects:
+            if not isinstance(obj, dict):
+                continue
+            object_id = str(obj.get("object_id") or "").strip()
+            if not object_id:
+                continue
+            valid_object_ids.add(object_id)
+
+    affordance_semantic_to_object: dict[str, str] = {}
+    affordance_semantic_to_common_action: dict[str, str] = {}
+    affordance_semantic_to_inventory_action: dict[str, str] = {}
+    affordance_action_type_to_inventory_action: dict[str, str] = {}
+    for item in affordances:
+        if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+            continue
+        object_id = str(item.get("object_id") or "").strip()
+        action_text = str(item.get("user_input") or item.get("label") or "").strip()
+        action_type = str(item.get("action_type") or "").strip()
+        if not action_text:
+            continue
+        semantic_key = _normalize_quick_action_semantic_key(action_text)
+        if object_id.startswith("inventory:"):
+            if semantic_key:
+                affordance_semantic_to_inventory_action[semantic_key] = action_text
+            if action_type and action_type not in affordance_action_type_to_inventory_action:
+                affordance_action_type_to_inventory_action[action_type] = action_text
+            continue
+        if (object_id.startswith("location:") or object_id.startswith("exit:")) and semantic_key:
+            affordance_semantic_to_object[semantic_key] = object_id
+            continue
+        if semantic_key:
+            affordance_semantic_to_common_action[semantic_key] = action_text
+
+    slot_semantic_to_object: dict[str, str] = {}
+    for slot in interaction_slots:
+        if not isinstance(slot, dict) or not bool(slot.get("enabled", False)):
+            continue
+        object_id = str(slot.get("object_id") or "").strip()
+        if not object_id:
+            continue
+        for candidate_text in (slot.get("default_input"), slot.get("label")):
+            semantic_key = _normalize_quick_action_semantic_key(str(candidate_text or "").strip())
+            if semantic_key:
+                slot_semantic_to_object[semantic_key] = object_id
+
+    def _append_object_action(object_id: str, action_text: str, semantic_key: str) -> None:
+        if object_id not in object_actions:
+            object_actions[object_id] = []
+            seen_per_object[object_id] = set()
+        if semantic_key in seen_per_object[object_id]:
+            return
+        object_actions[object_id].append(action_text)
+        seen_per_object[object_id].add(semantic_key)
+        seen_global.add(semantic_key)
+
+    def _append_common_action(action_text: str, semantic_key: str) -> None:
+        if semantic_key in seen_global:
+            return
+        common_actions.append(action_text)
+        seen_global.add(semantic_key)
+
+    # 结构化候选优先：先用 canonical + target_hint 定位，再由 affordance/slot 约束是否可执行。
+    for candidate in candidates:
+        action_text = str(candidate.get("display_text") or "").strip()
+        semantic_key = _normalize_quick_action_semantic_key(action_text)
+        if not action_text or not semantic_key or semantic_key in seen_global:
+            continue
+        canonical_key = str(candidate.get("canonical_intent_key") or "").strip()
+        target_hint = str(candidate.get("target_object_hint") or "").strip()
+        if target_hint.startswith("location:") or target_hint.startswith("exit:"):
+            if target_hint in valid_object_ids:
+                _append_object_action(target_hint, action_text, semantic_key)
+                matched_by_slot += 1
+                continue
+        if target_hint.startswith("inventory:"):
+            mapped_inventory_action = affordance_semantic_to_inventory_action.get(semantic_key)
+            if not mapped_inventory_action:
+                unmatched_actions.append(action_text)
+                continue
+            _append_common_action(mapped_inventory_action, semantic_key)
+            matched_by_slot += 1
+            continue
+        if canonical_key == "use_inventory_item":
+            inventory_action = affordance_action_type_to_inventory_action.get("use_item", "")
+            if inventory_action:
+                mapped_semantic = _normalize_quick_action_semantic_key(inventory_action)
+                if mapped_semantic:
+                    _append_common_action(inventory_action, mapped_semantic)
+                    matched_by_slot += 1
+                    continue
+        common_action = affordance_semantic_to_common_action.get(semantic_key, "")
+        if common_action:
+            _append_common_action(common_action, semantic_key)
+            matched_by_slot += 1
+            continue
+        unmatched_actions.append(action_text)
+
+    # 降级路径：quick_actions 只能映射回 enabled affordance/slot；未匹配文本只进入诊断。
+    for raw_action in quick_actions:
+        action_text = str(raw_action).strip()
+        semantic_key = _normalize_quick_action_semantic_key(action_text)
+        if not action_text or not semantic_key or semantic_key in seen_global:
+            continue
+        matched_object_id = affordance_semantic_to_object.get(semantic_key, "")
+        if not matched_object_id:
+            matched_object_id = slot_semantic_to_object.get(semantic_key, "")
+        if matched_object_id:
+            _append_object_action(matched_object_id, action_text, semantic_key)
+            matched_by_slot += 1
+            continue
+        common_action = affordance_semantic_to_common_action.get(semantic_key, "")
+        if common_action:
+            _append_common_action(common_action, semantic_key)
+            matched_by_slot += 1
+            continue
+        inventory_action = affordance_semantic_to_inventory_action.get(semantic_key, "")
+        if inventory_action:
+            mapped_semantic = _normalize_quick_action_semantic_key(inventory_action)
+            if mapped_semantic:
+                _append_common_action(inventory_action, mapped_semantic)
+                matched_by_slot += 1
+                continue
+        unmatched_actions.append(action_text)
+
+    unmapped_actions = list(dict.fromkeys(unmatched_actions))
+    return {
+        "common_actions": common_actions,
+        "object_actions": object_actions,
+        "diagnostics": {
+            "matched_by_slot": matched_by_slot,
+            "matched_by_text": matched_by_text,
+            "unmatched_to_common": 0,
+            "unmapped_actions": unmapped_actions,
+        },
+    }
+
+
 def _load_turn_timeout_seconds() -> int:
     """
     功能：读取 Web 回合超时配置；缺失或非法时降级到默认值 180 秒。
@@ -547,10 +849,48 @@ def build_initial_turn_payload(
         gm_state,
         final_response,
     )
+    play_state["quick_action_candidates"] = [
+        candidate.model_dump(mode="json")
+        for candidate in context.main_loop.gm_agent.suggest_quick_action_candidates(
+            gm_state,
+            final_response,
+            play_state["quick_actions"] if isinstance(play_state["quick_actions"], list) else [],
+        )
+    ]
     scene_snapshot = play_state.get("scene_snapshot")
+    quick_actions = (
+        play_state["quick_actions"] if isinstance(play_state["quick_actions"], list) else []
+    )
     play_state["affordances"] = (
         scene_snapshot.get("affordances", []) if isinstance(scene_snapshot, dict) else []
     )
+    quick_action_candidates = (
+        play_state["quick_action_candidates"]
+        if isinstance(play_state.get("quick_action_candidates"), list)
+        else []
+    )
+    if isinstance(scene_snapshot, dict):
+        play_state["quick_action_groups"] = _build_quick_action_groups(
+            scene_snapshot,
+            quick_actions,
+        )
+        play_state["quick_action_layout"] = _build_quick_action_layout(
+            scene_snapshot,
+            quick_actions,
+            quick_action_candidates,
+        )
+    else:
+        play_state["quick_action_groups"] = {"current": [], "nearby": []}
+        play_state["quick_action_layout"] = {
+            "common_actions": [],
+            "object_actions": {},
+            "diagnostics": {
+                "matched_by_slot": 0,
+                "matched_by_text": 0,
+                "unmatched_to_common": 0,
+                "unmapped_actions": [],
+            },
+        }
     play_state["failure_reason"] = ""
     play_state["suggested_next_step"] = (
         play_state["quick_actions"][0] if play_state["quick_actions"] else "观察周围"
@@ -715,6 +1055,8 @@ def run_turn(
         dict(raw_character_obj) if isinstance(raw_character_obj, dict) else {}
     )
     active_character = _enrich_character_inventory(raw_character)
+    state_flags = active_character.get("state_flags", [])
+    status_effects = active_character.get("status_effects", [])
     raw_scene_snapshot = result.get("scene_snapshot")
     scene_snapshot = dict(raw_scene_snapshot) if isinstance(raw_scene_snapshot, dict) else {}
     trace.stages.append(
@@ -779,12 +1121,41 @@ def run_turn(
     )
     scene_snapshot.update(build_scene_interaction_model(scene_snapshot, active_character))
     affordances = scene_snapshot.get("affordances", [])
+    quick_actions_raw = result.get("quick_actions", [])
+    quick_actions = quick_actions_raw if isinstance(quick_actions_raw, list) else []
+    quick_action_candidates = _sanitize_quick_action_candidates(
+        result.get("quick_action_candidates", [])
+    )
+    quick_action_groups = _build_quick_action_groups(scene_snapshot, quick_actions)
+    quick_action_layout = _build_quick_action_layout(
+        scene_snapshot,
+        quick_actions,
+        quick_action_candidates,
+    )
+    layout_diagnostics = (
+        quick_action_layout.get("diagnostics", {})
+        if isinstance(quick_action_layout, dict)
+        else {}
+    )
     trace.stages.append(
         TurnTraceStage(
             stage="gm.rendered",
             status="ok" if bool(str(result.get("final_response", ""))) else "failed",
             at=now_iso(),
-            detail={"quick_actions_count": len(result.get("quick_actions", []))},
+            detail={
+                "quick_actions_count": len(quick_actions),
+                "quick_action_candidates_count": len(quick_action_candidates),
+                "quick_actions_current_count": len(quick_action_groups["current"]),
+                "quick_actions_nearby_count": len(quick_action_groups["nearby"]),
+                "layout.matched_by_slot": int(layout_diagnostics.get("matched_by_slot", 0)),
+                "layout.matched_by_text": int(layout_diagnostics.get("matched_by_text", 0)),
+                "layout.unmatched_to_common": int(layout_diagnostics.get("unmatched_to_common", 0)),
+                "state_flags_count": len(state_flags) if isinstance(state_flags, list) else 0,
+                "status_effects_count": (
+                    len(status_effects) if isinstance(status_effects, list) else 0
+                ),
+                "status_summary": str(active_character.get("status_summary", "")),
+            },
         )
     )
     outer_emit_result = result.get("outer_emit_result")
@@ -823,7 +1194,10 @@ def run_turn(
         "action_intent": result.get("action_intent"),
         "physics_diff": result.get("physics_diff"),
         "final_response": str(result.get("final_response", "")),
-        "quick_actions": result.get("quick_actions", []),
+        "quick_actions": quick_actions,
+        "quick_action_candidates": quick_action_candidates,
+        "quick_action_groups": quick_action_groups,
+        "quick_action_layout": quick_action_layout,
         "affordances": affordances if isinstance(affordances, list) else [],
         "is_sandbox_mode": bool(result.get("is_sandbox_mode", sandbox_mode)),
         "active_character": active_character,

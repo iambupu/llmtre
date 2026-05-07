@@ -9,15 +9,29 @@ import logging
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from difflib import get_close_matches
 from typing import Any, cast
 
 from config.agent_model_loader import get_agent_model_binding
 from core.event_bus import EventBus
 from game_workflows.main_loop_config import load_main_loop_rules
-from state.contracts.agent import GMOutputBlock
+from state.contracts.agent import GMOutputBlock, QuickActionCandidate
 
 logger = logging.getLogger("Agent.GM")
 GM_GENERATED_QUICK_ACTIONS_KEY = "_gm_generated_quick_actions"
+GM_GENERATED_QUICK_ACTION_CANDIDATES_KEY = "_gm_generated_quick_action_candidates"
+CANONICAL_INTENT_KEY_WHITELIST: set[str] = {
+    "inspect_local",
+    "observe_local",
+    "wait_local",
+    "rest_local",
+    "move_to_exit",
+    "use_inventory_item",
+    "talk_to_npc",
+    "attack_target",
+    "inspect_object",
+    "generic_action",
+}
 
 
 class GMAgent:
@@ -62,6 +76,7 @@ class GMAgent:
         """
         # 请求边界：快捷行动只挂在当前 state，避免共享 GMAgent 实例跨 Web session 串话。
         state.pop(GM_GENERATED_QUICK_ACTIONS_KEY, None)
+        state.pop(GM_GENERATED_QUICK_ACTION_CANDIDATES_KEY, None)
         if self.llm_enabled:
             llm_text = self._render_with_llm(state, stream_callback=stream_callback)
             if llm_text:
@@ -82,6 +97,11 @@ class GMAgent:
         """
         narrative = self.render(state, stream_callback=stream_callback)
         quick_actions = self.suggest_quick_actions(state, narrative)
+        quick_action_candidates = self.suggest_quick_action_candidates(
+            state,
+            narrative,
+            quick_actions,
+        )
         failure_reason = self._build_failure_reason(state)
         suggested_next_step = quick_actions[0] if quick_actions else self._build_next_step(state)
         return GMOutputBlock(
@@ -89,6 +109,7 @@ class GMAgent:
             failure_reason=failure_reason,
             suggested_next_step=suggested_next_step,
             quick_actions=quick_actions,
+            quick_action_candidates=quick_action_candidates,
         )
 
     def _render_with_llm(
@@ -361,17 +382,58 @@ class GMAgent:
         出参：list[str]，最多 4 条可直接作为玩家输入的中文短句。
         异常：LLM 调用、JSON 解析或格式异常均内部降级到场景建议动作，不影响回合完成。
         """
-        constrained_actions = self._affordance_quick_actions(state)
-        if constrained_actions:
-            return constrained_actions
-        generated_actions = state.get(GM_GENERATED_QUICK_ACTIONS_KEY)
-        if isinstance(generated_actions, list) and generated_actions:
-            return [str(action) for action in generated_actions]
+        affordance_actions = self._affordance_quick_actions(state)
+        generated_actions: list[str] = []
+        embedded_actions = state.get(GM_GENERATED_QUICK_ACTIONS_KEY)
+        if isinstance(embedded_actions, list):
+            generated_actions = [
+                str(action).strip() for action in embedded_actions if str(action).strip()
+            ]
         if self.llm_enabled:
-            actions = self._suggest_quick_actions_with_llm(state, final_response)
-            if actions:
-                return actions
-        return self._fallback_quick_actions(state)
+            llm_actions = self._suggest_quick_actions_with_llm(state, final_response)
+            if llm_actions:
+                generated_actions = llm_actions
+        if affordance_actions and generated_actions:
+            normalized_generated = self._normalize_generated_actions(
+                generated_actions,
+                affordance_actions,
+            )
+            if normalized_generated:
+                ranked_affordance = self._rank_affordance_quick_actions(state, final_response)
+                return self._merge_actions(normalized_generated, ranked_affordance, limit=4)
+        ranked_affordance = self._rank_affordance_quick_actions(state, final_response)
+        if ranked_affordance:
+            return ranked_affordance[:4]
+        return []
+
+    def suggest_quick_action_candidates(
+        self,
+        state: dict[str, Any],
+        final_response: str,
+        quick_actions: list[str],
+    ) -> list[QuickActionCandidate]:
+        """
+        功能：生成结构化快捷动作候选，优先使用 LLM 结构化输出，失败时回退规则候选。
+        入参：state（dict[str, Any]）：当前回合状态；
+            final_response（str）：本回合叙事文本；
+            quick_actions（list[str]）：已生成的快捷动作文案。
+        出参：list[QuickActionCandidate]，用于后端对象约束落桶。
+        异常：LLM 调用/解析失败内部降级，不向上抛出，保持回合主链稳定。
+        """
+        embedded = state.get(GM_GENERATED_QUICK_ACTION_CANDIDATES_KEY)
+        if isinstance(embedded, list):
+            cleaned_embedded = self._sanitize_quick_action_candidates(embedded)
+            if cleaned_embedded:
+                return cleaned_embedded
+        if self.llm_enabled:
+            llm_candidates = self._suggest_quick_action_candidates_with_llm(
+                state,
+                final_response,
+                quick_actions,
+            )
+            if llm_candidates:
+                return llm_candidates
+        return self._fallback_quick_action_candidates(state, quick_actions)
 
     def _affordance_quick_actions(self, state: dict[str, Any]) -> list[str]:
         """
@@ -397,6 +459,110 @@ class GMAgent:
             if len(actions) >= 4:
                 break
         return actions
+
+    def _rank_affordance_quick_actions(
+        self,
+        state: dict[str, Any],
+        final_response: str,
+    ) -> list[str]:
+        """
+        功能：按本轮动作意图和叙事文本对 affordance 行动打分排序，提升“动作-叙事”相关性。
+        入参：state（dict[str, Any]）：当前回合状态；final_response（str）：本轮叙事文本。
+        出参：list[str]，按相关性排序后的可点击行动。
+        异常：不抛异常；字段缺失时按默认分值排序。
+        """
+        scene = self._as_mapping(state.get("scene_snapshot"))
+        raw_affordances = scene.get("affordances", [])
+        if not isinstance(raw_affordances, list):
+            return []
+        action = self._as_mapping(state.get("action_intent"))
+        intent_type = str(action.get("type") or "").strip().lower()
+        user_input = str(state.get("user_input") or "").strip()
+        scored: list[tuple[int, int, str]] = []
+        for index, item in enumerate(raw_affordances):
+            if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+                continue
+            text = str(item.get("user_input") or item.get("label") or "").strip()
+            if not text:
+                continue
+            score = 0
+            action_type = str(item.get("action_type") or "").strip().lower()
+            if action_type == intent_type and intent_type:
+                score += 45
+            if text and text in final_response:
+                score += 35
+            if user_input and (user_input in text or text in user_input):
+                score += 25
+            priority = item.get("priority")
+            if isinstance(priority, int):
+                score += max(0, 20 - priority)
+            scored.append((score, -index, text[:40]))
+        scored.sort(reverse=True)
+        result: list[str] = []
+        seen: set[str] = set()
+        for _, _, text in scored:
+            if text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
+
+    def _normalize_generated_actions(
+        self,
+        generated_actions: list[str],
+        affordance_actions: list[str],
+    ) -> list[str]:
+        """
+        功能：将 LLM 生成动作映射到可执行 affordance 输入，无法映射的候选一律丢弃。
+        入参：generated_actions（list[str]）：模型生成动作；
+            affordance_actions（list[str]）：当前场景可执行动作。
+        出参：list[str]，去重后的可执行动作列表。
+        异常：不抛异常；无法映射时丢弃候选，避免 GM 越权生成按钮。
+        """
+        if not generated_actions or not affordance_actions:
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in generated_actions:
+            candidate = raw.strip()[:40]
+            if not candidate:
+                continue
+            mapped = candidate if candidate in affordance_actions else ""
+            if not mapped:
+                close = get_close_matches(candidate, affordance_actions, n=1, cutoff=0.6)
+                mapped = close[0] if close else ""
+            if not mapped:
+                continue
+            if mapped in seen:
+                continue
+            seen.add(mapped)
+            normalized.append(mapped)
+        return normalized
+
+    def _merge_actions(
+        self,
+        primary: list[str],
+        secondary: list[str],
+        limit: int = 4,
+    ) -> list[str]:
+        """
+        功能：合并两组候选动作并去重，保证优先级顺序稳定。
+        入参：primary（list[str]）：高优先级动作；secondary（list[str]）：补位动作；
+            limit（int，默认 4）：最大返回数量。
+        出参：list[str]，合并去重后的结果。
+        异常：不抛异常；空列表输入时返回空结果。
+        """
+        merged: list[str] = []
+        seen: set[str] = set()
+        for action in [*primary, *secondary]:
+            text = str(action).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+            if len(merged) >= limit:
+                break
+        return merged
 
     def _build_failure_reason(self, state: dict[str, Any]) -> str:
         """
@@ -476,6 +642,55 @@ class GMAgent:
             logger.warning("GM 快捷行动生成失败，已降级为场景建议: %s", error)
             return []
 
+    def _suggest_quick_action_candidates_with_llm(
+        self,
+        state: dict[str, Any],
+        final_response: str,
+        quick_actions: list[str],
+    ) -> list[QuickActionCandidate]:
+        """
+        功能：调用 LLM 生成结构化快捷动作候选对象，仅产出意图键/对象提示/展示文本。
+        入参：state（dict[str, Any]）：当前回合状态；
+            final_response（str）：本回合叙事；
+            quick_actions（list[str]）：已生成的快捷动作文案（用于上下文）。
+        出参：list[QuickActionCandidate]，解析成功返回候选，失败返回空列表。
+        异常：网络、协议、JSON 解析异常均内部捕获并降级为空列表。
+        """
+        provider = str(self.llm_config.get("provider", "")).lower()
+        if provider != "ollama":
+            return []
+        model = str(self.llm_config.get("model", "")).strip()
+        if not model:
+            return []
+        base_url = str(self.llm_config.get("base_url", "http://localhost:11434")).rstrip("/")
+        prompt = self._build_quick_action_candidates_prompt(state, final_response, quick_actions)
+        body = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.4, "num_predict": 384},
+        }
+        request = urllib.request.Request(
+            url=f"{base_url}/api/generate",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.llm_timeout_seconds) as response:
+                response_text = response.read().decode("utf-8")
+                payload = json.loads(response_text)
+            payload_mapping = self._as_mapping(payload)
+            raw_text = str(payload_mapping.get("response", "")).strip()
+            raw_candidates = self._parse_quick_action_candidates(raw_text)
+            candidates = self._sanitize_quick_action_candidates(raw_candidates)
+            if candidates:
+                logger.info("GM 结构化快捷候选生成成功: count=%s model=%s", len(candidates), model)
+            return candidates
+        except Exception as error:  # noqa: BLE001
+            logger.warning("GM 结构化快捷候选生成失败，已降级规则映射: %s", error)
+            return []
+
     def _build_quick_actions_prompt(self, state: dict[str, Any], final_response: str) -> str:
         """
         功能：构建快捷行动生成提示词，限制模型只输出 JSON 数组。
@@ -503,6 +718,172 @@ class GMAgent:
             f"\n上下文JSON:\n{json.dumps(compact_context, ensure_ascii=False)}"
             '\n输出示例: ["观察木牌","询问老人线索","沿小路前进","检查背包"]'
         )
+
+    def _build_quick_action_candidates_prompt(
+        self,
+        state: dict[str, Any],
+        final_response: str,
+        quick_actions: list[str],
+    ) -> str:
+        """
+        功能：构建结构化快捷候选提示词，强制模型仅输出 JSON 对象数组。
+        入参：state（dict[str, Any]）：当前回合状态；final_response（str）：叙事文本；
+            quick_actions（list[str]）：已生成动作文案。
+        出参：str，可直接发送给模型的提示词。
+        异常：JSON 序列化失败时向上抛出，由调用方捕获并降级。
+        """
+        scene = self._as_mapping(state.get("scene_snapshot"))
+        compact_context = {
+            "turn_id": state.get("turn_id"),
+            "user_input": state.get("user_input", ""),
+            "final_response": final_response,
+            "quick_actions": quick_actions,
+            "current_location": scene.get("current_location"),
+            "scene_objects": scene.get("scene_objects"),
+            "affordances": scene.get("affordances"),
+            "interaction_slots": scene.get("interaction_slots"),
+        }
+        canonical_keys = sorted(CANONICAL_INTENT_KEY_WHITELIST)
+        return (
+            "你是 TRPG 动作分类器。只输出 JSON 数组，不要任何解释。"
+            "每个元素必须包含 canonical_intent_key、target_object_hint、display_text，"
+            "可选 confidence、reason。"
+            "canonical_intent_key 只能从白名单中选择，禁止创造新键。"
+            f"白名单: {json.dumps(canonical_keys, ensure_ascii=False)}。"
+            "target_object_hint 优先使用 object_id，"
+            "如 location:forest_edge / exit:camp / inventory:iron_sword_01。"
+            "如果无法判断目标对象，target_object_hint 置空字符串。"
+            "最多输出 8 条。"
+            f"\n上下文JSON:\n{json.dumps(compact_context, ensure_ascii=False)}"
+            "\n输出示例: "
+            '[{"canonical_intent_key":"move_to_exit",'
+            '"target_object_hint":"exit:camp","display_text":"前往营地","confidence":0.9}]'
+        )
+
+    def _parse_quick_action_candidates(self, text: str) -> list[dict[str, Any]]:
+        """
+        功能：解析模型返回的结构化快捷候选 JSON 数组。
+        入参：text（str）：模型响应文本，期望为 JSON 数组。
+        出参：list[dict[str, Any]]，可解析时返回数组项，失败返回空列表。
+        异常：JSON 解析失败内部捕获并降级为空列表。
+        """
+        if not text:
+            return []
+        stripped = text.strip()
+        if "```" in stripped:
+            stripped = stripped.replace("```json", "").replace("```", "").strip()
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, dict)]
+
+    def _sanitize_quick_action_candidates(
+        self,
+        raw_candidates: list[dict[str, Any]],
+    ) -> list[QuickActionCandidate]:
+        """
+        功能：校验并清洗结构化候选，丢弃非法字段并限制数量，保证后续落桶可控。
+        入参：raw_candidates（list[dict[str, Any]]）：模型或嵌入块返回的原始对象列表。
+        出参：list[QuickActionCandidate]，最多 8 条合法候选。
+        异常：对象构造失败内部捕获并跳过单条，不影响其余候选。
+        """
+        cleaned: list[QuickActionCandidate] = []
+        seen_display: set[str] = set()
+        for item in raw_candidates:
+            canonical_key = str(item.get("canonical_intent_key") or "").strip()
+            target_hint = str(item.get("target_object_hint") or "").strip()
+            display_text = str(item.get("display_text") or "").strip()
+            if not canonical_key or not display_text:
+                continue
+            if canonical_key not in CANONICAL_INTENT_KEY_WHITELIST:
+                canonical_key = "generic_action"
+            if display_text in seen_display:
+                continue
+            seen_display.add(display_text)
+            confidence_raw = item.get("confidence")
+            confidence = float(confidence_raw) if isinstance(confidence_raw, (float, int)) else None
+            reason = str(item.get("reason") or "")
+            cleaned.append(
+                QuickActionCandidate(
+                    canonical_intent_key=canonical_key,
+                    target_object_hint=target_hint,
+                    display_text=display_text[:40],
+                    confidence=confidence,
+                    reason=reason[:120],
+                )
+            )
+            if len(cleaned) >= 8:
+                break
+        return cleaned
+
+    def _fallback_quick_action_candidates(
+        self,
+        state: dict[str, Any],
+        quick_actions: list[str],
+    ) -> list[QuickActionCandidate]:
+        """
+        功能：在 LLM 结构化输出失败时，根据 affordance 与动作文本构建规则候选。
+        入参：state（dict[str, Any]）：当前回合状态；quick_actions（list[str]）：动作文案列表。
+        出参：list[QuickActionCandidate]，用于后端后续约束落桶。
+        异常：不抛异常；缺失字段时返回尽可能少但合法的候选。
+        """
+        scene = self._as_mapping(state.get("scene_snapshot"))
+        affordances = scene.get("affordances", [])
+        affordance_text_to_object: dict[str, str] = {}
+        if isinstance(affordances, list):
+            for affordance in affordances:
+                if not isinstance(affordance, dict):
+                    continue
+                text = str(affordance.get("user_input") or affordance.get("label") or "").strip()
+                object_id = str(affordance.get("object_id") or "").strip()
+                if text and object_id:
+                    affordance_text_to_object[text] = object_id
+        candidates: list[QuickActionCandidate] = []
+        for action in quick_actions:
+            text = str(action).strip()
+            if not text:
+                continue
+            object_hint = affordance_text_to_object.get(text, "")
+            canonical_key = self._infer_canonical_intent_key(text, object_hint)
+            candidates.append(
+                QuickActionCandidate(
+                    canonical_intent_key=canonical_key,
+                    target_object_hint=object_hint,
+                    display_text=text,
+                )
+            )
+            if len(candidates) >= 8:
+                break
+        return candidates
+
+    def _infer_canonical_intent_key(self, action_text: str, object_hint: str) -> str:
+        """
+        功能：按动作文本与对象提示推断 canonical_intent_key，作为结构化失败兜底。
+        入参：action_text（str）：动作文案；object_hint（str）：对象提示。
+        出参：str，白名单内 canonical_intent_key。
+        异常：不抛异常；无法命中时返回 generic_action。
+        """
+        text = action_text.strip()
+        if object_hint.startswith("exit:") or "前往" in text or "移动" in text:
+            return "move_to_exit"
+        if object_hint.startswith("inventory:") or "使用" in text or "背包" in text:
+            return "use_inventory_item"
+        if "检查" in text:
+            return "inspect_local"
+        if "观察" in text or "查看" in text:
+            return "observe_local"
+        if "等待" in text:
+            return "wait_local"
+        if "休息" in text:
+            return "rest_local"
+        if "交谈" in text or "对话" in text:
+            return "talk_to_npc"
+        if "攻击" in text:
+            return "attack_target"
+        return "generic_action"
 
     def _parse_quick_actions(self, raw_text: str) -> list[str]:
         """
@@ -630,6 +1011,8 @@ class GMAgent:
             "如果 is_valid=false，请礼貌说明失败原因。"
             "叙事正文之后必须追加隐藏块 <quick_actions>，其中放一个 JSON 字符串数组，"
             "包含 4 个下一步玩家可直接输入的中文短行动。"
+            "这 4 个行动必须与本轮叙事中出现的实体/线索直接相关，"
+            "禁止只输出泛化动作（如固定的观察/等待/前进组合）。"
             "隐藏块格式必须严格为 "
             "<quick_actions>[\"行动1\",\"行动2\",\"行动3\",\"行动4\"]</quick_actions>。"
             f"\n状态JSON:\n{state_json}"

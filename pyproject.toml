@@ -56,7 +56,22 @@ Documentation = "https://github.com/iambupu/llmtre/tree/main/.code_md"
 Repository = "https://github.com/iambupu/llmtre"
 
 [tool.setuptools.packages.find]
-include = ["game_workflows*", "state*", "web_api*", "config*", "agents*", "tools*", "core*"]
+include = [
+    "game_workflows*",
+    "state*",
+    "web_api*",
+    "config*",
+    "agents*",
+    "tools*",
+    "core*",
+    "templates*",
+    "static*",
+]
+
+[tool.setuptools.package-data]
+config = ["*.yml", "*.json", "api/*.yaml"]
+templates = ["*.html"]
+static = ["*.js", "*.css"]
 
 [tool.black]
 line-length = 100
@@ -75,7 +90,7 @@ strict = true
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
-exclude = ["^tests/"]
+exclude = ["^tests/", "^build/", "^\\.pytest_wheelhouse/"]
 
 [[tool.mypy.overrides]]
 module = ["yaml"]

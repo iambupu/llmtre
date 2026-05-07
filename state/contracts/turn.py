@@ -94,6 +94,11 @@ class TurnResult(BaseModel):
     physics_diff: dict[str, Any] | None = None
     final_response: str
     quick_actions: list[str] = Field(default_factory=list)
+    quick_action_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    quick_action_groups: dict[str, list[str]] = Field(
+        default_factory=lambda: {"current": list[str](), "nearby": list[str]()}
+    )
+    quick_action_layout: dict[str, Any] = Field(default_factory=dict)
     affordances: list[SceneAffordance] = Field(default_factory=list)
     scene_snapshot: SceneSnapshotV2 | None = None
     active_character: dict[str, Any] = Field(default_factory=dict)

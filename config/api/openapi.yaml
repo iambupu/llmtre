@@ -314,7 +314,9 @@ components:
 
   responses:
     InvalidArgument:
-      description: 参数不合法
+      description: |
+        参数不合法。
+        常见场景：session_id/request_id/user_input/memory 参数校验失败。
       content:
         application/json:
           schema:
@@ -350,7 +352,10 @@ components:
               code: TURN_NOT_FOUND
               message: session_turn_id 不存在
     TurnConflict:
-      description: 回合并发冲突或幂等冲突
+      description: |
+        回合并发冲突、幂等冲突或沙盒状态冲突。
+        典型错误码：TURN_CONFLICT、IDEMPOTENCY_CONFLICT、SANDBOX_BUSY、
+        SANDBOX_OWNER_MISMATCH、SANDBOX_STATE_INVALID、SHADOW_STATE_NOT_FOUND。
       content:
         application/json:
           schema:
@@ -409,6 +414,10 @@ components:
             - TURN_NOT_FOUND
             - TURN_CONFLICT
             - IDEMPOTENCY_CONFLICT
+            - SANDBOX_BUSY
+            - SANDBOX_OWNER_MISMATCH
+            - SANDBOX_STATE_INVALID
+            - SHADOW_STATE_NOT_FOUND
             - MODEL_UNAVAILABLE
             - TURN_TIMEOUT
             - INTERNAL_ERROR
@@ -443,6 +452,59 @@ components:
       additionalProperties:
         type: string
       description: 透传给服务端的会话附加元信息。
+
+    CharacterStatusEffect:
+      type: object
+      required: [key, label, kind, severity, description]
+      properties:
+        key:
+          type: string
+          description: 状态效果稳定键，来自资源阈值或 state_flags_json。
+        label:
+          type: string
+          description: 由 character_status 规则层派生的展示文案。
+        kind:
+          type: string
+          description: 状态类别，例如 resource/activity/awareness。
+        severity:
+          type: string
+          description: 展示严重度，例如 info/warning/critical。
+        description:
+          type: string
+          description: 给玩家和 GM prompt 使用的状态说明。
+    CharacterStatusContext:
+      type: object
+      required: [resource_state, flags, prompt_text]
+      properties:
+        resource_state:
+          type: string
+          description: HP/MP 阈值派生的资源状态。
+        flags:
+          type: array
+          items:
+            type: string
+          description: SQLite state_flags_json 解析后的稳定标签。
+        prompt_text:
+          type: string
+          description: 注入 GM/NLU 上下文的状态提示文本。
+    ActiveCharacter:
+      type: object
+      additionalProperties: true
+      properties:
+        state_flags:
+          type: array
+          items:
+            type: string
+          description: 从 entities_active/entities_shadow.state_flags_json 读取并去重。
+        status_summary:
+          type: string
+          description: 后端根据 SQLite 状态与 character_status 规则派生的摘要。
+        status_effects:
+          type: array
+          items:
+            $ref: "#/components/schemas/CharacterStatusEffect"
+        status_context:
+          $ref: "#/components/schemas/CharacterStatusContext"
 
     MemoryPolicy:
       type: object
@@ -491,6 +553,8 @@ components:
           $ref: "#/components/schemas/SessionTurnId"
         created_at:
           $ref: "#/components/schemas/IsoTime"
+        active_character:
+          $ref: "#/components/schemas/ActiveCharacter"
 
     GetSessionResponse:
       type: object
@@ -511,6 +575,8 @@ components:
           $ref: "#/components/schemas/SessionTurnId"
         last_active_at:
           $ref: "#/components/schemas/IsoTime"
+        active_character:
+          $ref: "#/components/schemas/ActiveCharacter"
 
     CreateTurnRequest:
       allOf:
@@ -582,8 +648,7 @@ components:
           type: object
           additionalProperties: true
         active_character:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ActiveCharacter"
         trace:
           type: object
           additionalProperties: true

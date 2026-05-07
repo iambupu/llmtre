@@ -92,6 +92,49 @@ def test_gm_render_block_returns_invalid_with_failure_reason() -> None:
     assert block.suggested_next_step == "观察周围"
 
 
+def test_gm_llm_prompt_includes_character_status_context() -> None:
+    """
+    功能：验证 GM LLM 提示词包含角色状态摘要、状态效果和本回合 physics_diff。
+    入参：无，使用内联 state。
+    出参：None。
+    异常：断言失败表示 active_character 状态上下文没有进入叙事模型输入。
+    """
+    agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
+    prompt = agent._build_llm_prompt(  # noqa: SLF001
+        {
+            "turn_id": 1,
+            "user_input": "继续前进",
+            "turn_outcome": "valid_action",
+            "is_valid": True,
+            "action_intent": {"type": "move"},
+            "physics_diff": {"mp_delta": -1, "state_flags_add": ["moved_recently"]},
+            "active_character": {
+                "id": "player_01",
+                "name": "玩家",
+                "status_summary": "受伤、刚刚移动",
+                "status_effects": [
+                    {
+                        "key": "hp_wounded",
+                        "label": "受伤",
+                        "kind": "resource",
+                        "severity": "warning",
+                        "description": "生命值低于安全线。",
+                    }
+                ],
+                "status_context": {
+                    "resource_state": "hp_wounded",
+                    "flags": ["moved_recently"],
+                    "prompt_text": "受伤(warning): 生命值低于安全线。",
+                },
+            },
+            "scene_snapshot": {"recent_memory": ""},
+        }
+    )
+    assert "受伤、刚刚移动" in prompt
+    assert "state_flags_add" in prompt
+    assert "生命值低于安全线" in prompt
+
+
 def test_gm_quick_actions_prioritize_affordances() -> None:
     """
     功能：验证快捷行动优先使用 affordances，避免 LLM 或兜底动作越权漂移。
@@ -113,6 +156,34 @@ def test_gm_quick_actions_prioritize_affordances() -> None:
     }
     actions = agent.suggest_quick_actions(state, "叙事文本")
     assert actions[:3] == ["前往北门", "询问守卫", "观察周围"]
+
+
+def test_gm_quick_actions_drop_unmapped_generated_actions(monkeypatch) -> None:
+    """
+    功能：验证 LLM/隐藏块生成的快捷行动必须映射到 enabled affordance 才能返回。
+    入参：monkeypatch：注入模型输出。
+    出参：None。
+    异常：断言失败表示 GM 重新允许越权快捷行动进入前端按钮。
+    """
+    agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
+    agent.llm_enabled = True
+    agent.llm_config = {"provider": "ollama", "model": "test-model"}
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: _Response(
+            '{"response":"叙事<quick_actions>[\\"凭空飞走\\"]</quick_actions>"}'.encode()
+        ),
+    )
+    state = {
+        "scene_snapshot": {
+            "affordances": [{"enabled": True, "user_input": "观察周围"}],
+        }
+    }
+
+    text = agent.render(state)
+    actions = agent.suggest_quick_actions(state, text)
+
+    assert actions == ["观察周围"]
 
 
 def test_gm_fallback_quick_actions_deduplicate_and_limit_to_four() -> None:
@@ -173,9 +244,14 @@ def test_gm_suggest_quick_actions_llm_failure_has_warning_log(
     monkeypatch.setattr("urllib.request.urlopen", _raise_url_error)
     caplog.set_level(logging.WARNING, logger="Agent.GM")
 
-    state = {"scene_snapshot": {"suggested_actions": ["观察周围", "继续前进"]}}
+    state = {
+        "scene_snapshot": {
+            "affordances": [{"enabled": True, "user_input": "观察周围"}],
+            "suggested_actions": ["观察周围", "继续前进"],
+        }
+    }
     actions = agent.suggest_quick_actions(state, "叙事")
-    assert actions
+    assert actions == ["观察周围"]
     assert "GM 快捷行动生成失败，已降级为场景建议" in caplog.text
 
 
@@ -260,7 +336,16 @@ def test_gm_stream_response_filters_hidden_blocks_and_keeps_quick_actions(
     )
     caplog.set_level(logging.WARNING, logger="Agent.GM")
     chunks: list[str] = []
-    state = {"is_valid": True, "action_intent": {"type": "wait"}}
+    state = {
+        "is_valid": True,
+        "action_intent": {"type": "wait"},
+        "scene_snapshot": {
+            "affordances": [
+                {"enabled": True, "user_input": "观察门"},
+                {"enabled": True, "user_input": "询问人"},
+            ]
+        },
+    }
 
     text = agent.render(
         state,
@@ -301,8 +386,8 @@ def test_gm_embedded_quick_actions_are_request_local(monkeypatch) -> None:
         ]
     )
     monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: next(responses))
-    state_a = {"scene_snapshot": {}}
-    state_b = {"scene_snapshot": {}}
+    state_a = {"scene_snapshot": {"affordances": [{"enabled": True, "user_input": "甲行动一"}]}}
+    state_b = {"scene_snapshot": {"affordances": [{"enabled": True, "user_input": "乙行动一"}]}}
 
     text_a = agent.render(state_a)
     text_b = agent.render(state_b)
@@ -311,8 +396,8 @@ def test_gm_embedded_quick_actions_are_request_local(monkeypatch) -> None:
 
     assert text_a == "甲叙事"
     assert text_b == "乙叙事"
-    assert actions_a == ["甲行动一", "甲行动二"]
-    assert actions_b == ["乙行动一", "乙行动二"]
+    assert actions_a == ["甲行动一"]
+    assert actions_b == ["乙行动一"]
 
 
 def test_gm_stream_callback_failure_is_logged_and_stream_continues(

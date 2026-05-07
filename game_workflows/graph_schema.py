@@ -5,6 +5,22 @@ TypedDict / Pydantic 状态流转数据结构严格定义
 from typing import Any, TypedDict
 
 
+class StatusEffectState(TypedDict):
+    """角色派生状态效果"""
+    key: str
+    label: str
+    kind: str
+    severity: str
+    description: str
+
+
+class StatusContextState(TypedDict):
+    """面向 Agent 的角色状态上下文"""
+    resource_state: str
+    flags: list[str]
+    prompt_text: str
+
+
 class CharacterState(TypedDict):
     """角色状态"""
     id: str
@@ -15,6 +31,10 @@ class CharacterState(TypedDict):
     max_mp: int
     inventory: list[str]
     location: str
+    state_flags: list[str]
+    status_summary: str
+    status_effects: list[StatusEffectState]
+    status_context: StatusContextState
 
 
 class WorldState(TypedDict, total=False):
@@ -88,6 +108,7 @@ class FlowState(TypedDict):
     # 6. 最终输出文本
     final_response: str
     quick_actions: list[str]
+    quick_action_candidates: list[dict[str, Any]]
     write_results: list[dict[str, Any]]
     failure_reason: str
     suggested_next_step: str

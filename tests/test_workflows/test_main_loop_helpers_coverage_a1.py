@@ -56,7 +56,11 @@ class _DummyEntityProbes:
     def get_item_definition(self, _item_id: str) -> dict[str, Any] | None:
         return self._item_definition
 
-    def get_location_info(self, _location_id: str, use_shadow: bool = False) -> dict[str, Any] | None:
+    def get_location_info(
+        self,
+        _location_id: str,
+        use_shadow: bool = False,
+    ) -> dict[str, Any] | None:
         del use_shadow
         return self._location_info
 
@@ -128,14 +132,34 @@ def test_scene_helpers_handle_invalid_and_fallback_paths() -> None:
     probes._character_stats = {
         "entity_id": "player_01",
         "name": "玩家",
-        "hp": 10,
+        "hp": 2,
         "max_hp": 10,
-        "mp": 5,
+        "mp": 1,
         "max_mp": 5,
         "current_location_id": "unknown",
+        "state_flags_json": '["moved_recently", "unknown_flag", "moved_recently"]',
     }
-    character = build_character_state(probes, "player_01")
+    character = build_character_state(
+        probes,
+        "player_01",
+        rules={
+            "character_status": {
+                "flags": {
+                    "moved_recently": {
+                        "label": "刚刚移动",
+                        "kind": "activity",
+                        "severity": "info",
+                        "description": "角色刚完成移动。",
+                    }
+                }
+            }
+        },
+    )
     assert character is not None
+    assert character["state_flags"] == ["moved_recently", "unknown_flag"]
+    assert character["status_summary"] == "濒危、法力不足、刚刚移动、unknown flag"
+    assert character["status_context"]["resource_state"] == "hp_critical"
+    assert "角色刚完成移动" in character["status_context"]["prompt_text"]
 
     snapshot_none = build_scene_snapshot(probes, {}, None)
     assert snapshot_none is None

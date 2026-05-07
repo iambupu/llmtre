@@ -13,7 +13,8 @@ export function parseSseChunk(
   buffer: string,
   chunk: string
 ): { events: SseEvent[]; remaining: string } {
-  const combined = `${buffer}${chunk}`;
+  // 统一换行风格，兼容代理或网关把 LF 转成 CRLF 的场景。
+  const combined = `${buffer}${chunk}`.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const blocks = combined.split("\n\n");
   const remaining = blocks.pop() ?? "";
   const events: SseEvent[] = [];
@@ -23,10 +24,11 @@ export function parseSseChunk(
     let eventName = "message";
     const dataLines: string[] = [];
     for (const line of lines) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trim());
+      const normalizedLine = line.trimStart();
+      if (normalizedLine.startsWith("event:")) {
+        eventName = normalizedLine.slice(6).trim();
+      } else if (normalizedLine.startsWith("data:")) {
+        dataLines.push(normalizedLine.slice(5).trim());
       }
     }
     const raw = dataLines.join("\n");

@@ -20,7 +20,10 @@ RULES: Final[tuple[LogCheckRule, ...]] = (
         file_name="main_loop.log",
         must_contain=("正在解析玩家输入", "物理结算完成", "数据库更新已提交", "正在生成叙事响应"),
     ),
-    LogCheckRule(file_name="event_bus.log", must_contain=("事件总线已就绪",)),
+    LogCheckRule(
+        file_name="event_bus.log",
+        must_contain=("事件总线已就绪", "事件触发", "写计划开始", "写计划事务已提交"),
+    ),
     LogCheckRule(
         file_name="outer_loop.log",
         must_contain=("外环",),

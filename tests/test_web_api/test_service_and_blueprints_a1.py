@@ -16,6 +16,8 @@ from web_api.blueprints.sessions import sessions_blueprint
 from web_api.service import (
     ApiRuntimeContext,
     TurnExecutionError,
+    _build_quick_action_groups,
+    _build_quick_action_layout,
     _character_exists,
     _enrich_character_inventory,
     _ensure_runtime_schema_ready,
@@ -591,6 +593,14 @@ def test_get_play_state_and_build_initial_turn_payload_cover_main_paths(
         def suggest_quick_actions(self, state: dict[str, Any], final_response: str) -> list[str]:
             return ["观察周围", final_response]
 
+        def suggest_quick_action_candidates(
+            self,
+            state: dict[str, Any],
+            final_response: str,
+            quick_actions: list[str],
+        ) -> list[Any]:
+            return []
+
     class _FakeMainLoop:
         def __init__(self) -> None:
             self.gm_agent = _FakeGMAgent()
@@ -642,6 +652,52 @@ def test_get_play_state_and_build_initial_turn_payload_cover_main_paths(
     assert initial_payload["final_response"].startswith("开场:")
     assert initial_payload["quick_actions"][0] == "观察周围"
     assert initial_payload["outcome"] == "initial_scene"
+
+
+def test_quick_action_layout_drops_unmatched_actions() -> None:
+    """
+    功能：验证快捷动作布局只接纳 enabled affordance，可疑文本仅进入诊断信息。
+    入参：无，使用内联 scene_snapshot。
+    出参：None。
+    异常：断言失败表示未授权 quick_action 又进入了可点击布局。
+    """
+    scene_snapshot = {
+        "current_location": {"id": "camp"},
+        "scene_objects": [{"object_id": "exit:forest", "label": "森林"}],
+        "interaction_slots": [
+            {
+                "object_id": "exit:forest",
+                "enabled": True,
+                "default_input": "前往森林",
+                "label": "前往森林",
+            }
+        ],
+        "affordances": [
+            {"enabled": True, "user_input": "观察周围", "action_type": "observe"},
+            {
+                "enabled": True,
+                "user_input": "前往森林",
+                "action_type": "move",
+                "object_id": "exit:forest",
+                "location_id": "forest",
+            },
+        ],
+    }
+
+    groups = _build_quick_action_groups(
+        scene_snapshot,
+        ["观察周围", "凭空飞走", "前往森林"],
+    )
+    layout = _build_quick_action_layout(
+        scene_snapshot,
+        ["观察周围", "凭空飞走", "前往森林"],
+        [{"canonical_intent_key": "generic_action", "display_text": "凭空飞走"}],
+    )
+
+    assert groups == {"current": ["观察周围"], "nearby": ["前往森林"]}
+    assert layout["common_actions"] == ["观察周围"]
+    assert layout["object_actions"] == {"exit:forest": ["前往森林"]}
+    assert "凭空飞走" in layout["diagnostics"]["unmapped_actions"]
 
 
 def test_get_play_state_raises_when_main_loop_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:

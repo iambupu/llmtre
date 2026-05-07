@@ -32,7 +32,8 @@ class GMOutputBlock(BaseModel):
     """
     功能：标准化 GM 输出，分离叙事正文、失败原因、下一步建议和快捷行动。
     入参：narrative（str）：玩家可见叙事；failure_reason（str）：失败原因；
-        suggested_next_step（str）：建议下一步；quick_actions（list[str]）：可点击行动。
+        suggested_next_step（str）：建议下一步；quick_actions（list[str]）：可点击行动；
+        quick_action_candidates（list[QuickActionCandidate]）：结构化候选动作。
     出参：GMOutputBlock。
     异常：字段类型非法时由 Pydantic 抛出 ValidationError。
     """
@@ -41,3 +42,23 @@ class GMOutputBlock(BaseModel):
     failure_reason: str = ""
     suggested_next_step: str = ""
     quick_actions: list[str] = Field(default_factory=list)
+    quick_action_candidates: list[QuickActionCandidate] = Field(default_factory=list)
+
+
+class QuickActionCandidate(BaseModel):
+    """
+    功能：定义 GM 结构化快捷动作候选，供后端按对象与意图约束安全落桶。
+    入参：canonical_intent_key（str）：归一化意图键；
+        target_object_hint（str）：对象提示，可为 location/exit/inventory 前缀；
+        display_text（str）：前端按钮文案；
+        confidence（float | None）：模型置信度；
+        reason（str）：模型附带理由。
+    出参：QuickActionCandidate。
+    异常：字段类型非法时由 Pydantic 抛出 ValidationError。
+    """
+
+    canonical_intent_key: str
+    target_object_hint: str
+    display_text: str
+    confidence: float | None = None
+    reason: str = ""

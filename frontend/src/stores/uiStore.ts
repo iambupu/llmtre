@@ -11,7 +11,7 @@ type UiState = {
 
 export const useUiStore = create<UiState>((set) => ({
   outputMode: "stream",
-  debugVisible: true,
+  debugVisible: false,
   setOutputMode: (outputMode) => set({ outputMode }),
   toggleDebug: () => set((state) => ({ debugVisible: !state.debugVisible })),
 }));

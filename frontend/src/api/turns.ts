@@ -87,6 +87,9 @@ export async function createTurnStream(
         );
       }
       if (evt.event === "done") {
+        if (typeof payload !== "object" || payload === null) {
+          throw new Error("流式 done 事件格式非法：缺少 JSON 对象载荷");
+        }
         donePayload = payload as TurnResult;
       }
     }

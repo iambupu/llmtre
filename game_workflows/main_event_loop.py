@@ -438,6 +438,10 @@ class MainEventLoop:
         return {
             "final_response": output.narrative,
             "quick_actions": output.quick_actions,
+            "quick_action_candidates": [
+                candidate.model_dump(mode="json")
+                for candidate in output.quick_action_candidates
+            ],
             "failure_reason": output.failure_reason,
             "suggested_next_step": output.suggested_next_step,
         }
@@ -524,12 +528,17 @@ class MainEventLoop:
         use_shadow: bool = False,
     ) -> CharacterState | None:
         """
-        功能：执行 `_build_character_state` 相关业务逻辑。
-        入参：entity_id；use_shadow。
-        出参：CharacterState | None。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        功能：读取角色结构化状态并叠加规则层派生状态摘要，供 NLU/GM/API 共享。
+        入参：entity_id（str）：角色 ID；use_shadow（bool，默认 False）：是否读取 Shadow 表。
+        出参：CharacterState | None，角色不存在时返回 None。
+        异常：只读探针异常由 helper 策略处理或向上抛出，调用方负责记录。
         """
-        return build_character_state_helper(self.entity_probes, entity_id, use_shadow)
+        return build_character_state_helper(
+            self.entity_probes,
+            entity_id,
+            use_shadow,
+            rules=self.rules,
+        )
 
     async def run(
         self,
@@ -592,6 +601,7 @@ class MainEventLoop:
             "is_sandbox_mode": is_sandbox_mode,
             "final_response": "",
             "quick_actions": [],
+            "quick_action_candidates": [],
             "write_results": [],
             "failure_reason": "",
             "suggested_next_step": "",

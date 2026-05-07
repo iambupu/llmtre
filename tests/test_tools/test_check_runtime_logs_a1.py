@@ -35,7 +35,17 @@ def _write_all_required_logs(log_dir) -> None:
         ),
         encoding="utf-8",
     )
-    (log_dir / "event_bus.log").write_text(_line(0, "事件总线已就绪"), encoding="utf-8")
+    (log_dir / "event_bus.log").write_text(
+        "\n".join(
+            [
+                _line(0, "事件总线已就绪"),
+                _line(0, "事件触发"),
+                _line(0, "写计划开始"),
+                _line(0, "写计划事务已提交"),
+            ]
+        ),
+        encoding="utf-8",
+    )
     (log_dir / "outer_loop.log").write_text(_line(0, "外环事件已投递"), encoding="utf-8")
 
 

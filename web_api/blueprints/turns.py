@@ -76,6 +76,59 @@ def _append_trace_stage(
     )
 
 
+def _normalize_turn_trace(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：将 run_turn 响应中的 trace 规整为可出站的最小 TurnTrace 结构。
+    入参：payload（dict[str, Any]）：已组装的回合响应负载，可能包含缺失或畸形 trace。
+    出参：dict[str, Any]，至少包含 trace_id、stages、errors，并在缺少 GM 阶段时补足
+        `gm.rendered` 诊断证据。
+    异常：不抛异常；字段缺失时按响应负载可见信息降级生成最小追踪。
+    """
+    trace_id = str(payload.get("trace_id") or new_trace_id())
+    trace = payload.get("trace")
+    if not isinstance(trace, dict):
+        trace = {"trace_id": trace_id, "stages": [], "errors": []}
+
+    trace["trace_id"] = trace_id
+    stages = trace.get("stages")
+    if not isinstance(stages, list):
+        trace["stages"] = []
+        stages = trace["stages"]
+
+    errors = trace.get("errors")
+    if not isinstance(errors, list):
+        trace["errors"] = []
+
+    # 降级路径：测试替身或旧版 worker 可能只返回业务字段，不返回 TurnTrace。
+    # 这里基于出站 payload 补齐 GM 渲染阶段，让调试面板仍能看到关键诊断指标。
+    if not any(isinstance(item, dict) and item.get("stage") == "gm.rendered" for item in stages):
+        active_character = payload.get("active_character")
+        character = active_character if isinstance(active_character, dict) else {}
+        quick_actions = payload.get("quick_actions")
+        quick_action_candidates = payload.get("quick_action_candidates")
+        status_effects = character.get("status_effects")
+        stages.append(
+            {
+                "stage": "gm.rendered",
+                "status": "ok" if bool(str(payload.get("final_response", ""))) else "failed",
+                "at": now_iso(),
+                "detail": {
+                    "quick_actions_count": len(quick_actions)
+                    if isinstance(quick_actions, list)
+                    else 0,
+                    "quick_action_candidates_count": len(quick_action_candidates)
+                    if isinstance(quick_action_candidates, list)
+                    else 0,
+                    "status_effects_count": len(status_effects)
+                    if isinstance(status_effects, list)
+                    else 0,
+                    "status_summary": str(character.get("status_summary", "")),
+                },
+            }
+        )
+    return trace
+
+
 def _build_post_run_error_payload(
     payload: dict[str, Any] | None,
     stage: str,
@@ -189,6 +242,12 @@ def _build_turn_response_payload(
         "physics_diff": payload["physics_diff"],
         "final_response": payload["final_response"],
         "quick_actions": payload["quick_actions"],
+        "quick_action_candidates": payload.get("quick_action_candidates", []),
+        "quick_action_groups": payload.get("quick_action_groups", {"current": [], "nearby": []}),
+        "quick_action_layout": payload.get(
+            "quick_action_layout",
+            {"common_actions": [], "object_actions": {}},
+        ),
         "affordances": payload["affordances"],
         "memory_summary": memory_summary,
         "active_character": payload["active_character"],
@@ -203,6 +262,7 @@ def _build_turn_response_payload(
         "debug_trace": payload["debug_trace"],
         "errors": payload["errors"],
     }
+    response_payload["trace"] = _normalize_turn_trace(response_payload)
     _append_trace_stage(
         response_payload,
         stage="api.persisted",
@@ -411,7 +471,7 @@ def create_turn(session_id: str) -> tuple[Any, int]:
     context = get_runtime_context()
     session_lock = context.get_session_lock(session_id)
     with session_lock:
-        session, policy_error = _refresh_session_and_apply_memory_policy(
+        refreshed_session, policy_error = _refresh_session_and_apply_memory_policy(
             context=context,
             session_id=session_id,
             body=body,
@@ -419,8 +479,9 @@ def create_turn(session_id: str) -> tuple[Any, int]:
         )
         if policy_error is not None:
             return policy_error
-        if session is None:
+        if refreshed_session is None:
             return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
+        session = refreshed_session
         existing = context.session_store.get_idempotent_response(
             scope="create_turn",
             session_id=session_id,
@@ -446,10 +507,14 @@ def create_turn(session_id: str) -> tuple[Any, int]:
                 request_id=request_id,
             )
             if acquired_sandbox_lock and not bool(payload.get("is_sandbox_mode", False)):
-                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+                main_loop = context.main_loop
+                if main_loop is not None:
+                    main_loop.db_updater.release_sandbox_lock(session_id=session_id)
         except TurnExecutionError as err:
             if acquired_sandbox_lock:
-                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+                main_loop = context.main_loop
+                if main_loop is not None:
+                    main_loop.db_updater.release_sandbox_lock(session_id=session_id)
             logger.exception(
                 "回合执行失败: route=create_turn session_id=%s request_body=%s",
                 session_id,
@@ -469,7 +534,9 @@ def create_turn(session_id: str) -> tuple[Any, int]:
             )
         except Exception:
             if acquired_sandbox_lock:
-                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+                main_loop = context.main_loop
+                if main_loop is not None:
+                    main_loop.db_updater.release_sandbox_lock(session_id=session_id)
             raise
         try:
             memory_summary = _build_memory_summary_if_needed(
@@ -633,7 +700,7 @@ def _run_turn_stream_with_lock(
     """
     session_lock = context.get_session_lock(session_id)
     with session_lock:
-        session, policy_error = _refresh_session_and_apply_memory_policy(
+        refreshed_session, policy_error = _refresh_session_and_apply_memory_policy(
             context=context,
             session_id=session_id,
             body=body,
@@ -651,6 +718,15 @@ def _run_turn_stream_with_lock(
                 )
             )
             return
+        if refreshed_session is None:
+            target_queue.put(
+                (
+                    "error",
+                    error("SESSION_NOT_FOUND", "session_id 不存在", 404)[0].get_json(),
+                )
+            )
+            return
+        session = refreshed_session
         if session is None:
             target_queue.put(
                 (

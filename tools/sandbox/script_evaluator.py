@@ -111,10 +111,15 @@ class ScriptEvaluator:
         if isinstance(node, ast.Tuple):
             return tuple(self._eval_safe_ast(elt, context) for elt in node.elts)
         if isinstance(node, ast.Dict):
-            return {
-                self._eval_safe_ast(k, context): self._eval_safe_ast(v, context)
-                for k, v in zip(node.keys, node.values)
-            }
+            result: dict[Any, Any] = {}
+            for key_node, value_node in zip(node.keys, node.values):
+                if key_node is None:
+                    raise ValueError("不允许字典展开语法")
+                result[self._eval_safe_ast(key_node, context)] = self._eval_safe_ast(
+                    value_node,
+                    context,
+                )
+            return result
         raise ValueError(f"不允许的语法节点: {type(node).__name__}")
 
     def evaluate_llm_condition(self, prompt: str, history: str) -> bool:

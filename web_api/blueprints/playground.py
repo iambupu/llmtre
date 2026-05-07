@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import Blueprint, render_template, send_from_directory
+from flask import Blueprint, Response, render_template, send_from_directory
 from werkzeug.exceptions import NotFound
 
 playground_blueprint = Blueprint("playground", __name__)
@@ -22,7 +22,7 @@ def playground_page() -> str:
 
 
 @playground_blueprint.get("/app")
-def app_page():
+def app_page() -> Response | str:
     """
     功能：提供 React 前端同源入口，优先返回构建产物，缺失时返回降级引导页。
     入参：无。
@@ -36,7 +36,7 @@ def app_page():
 
 
 @playground_blueprint.get("/app/<path:asset_path>")
-def app_assets(asset_path: str):
+def app_assets(asset_path: str) -> Response:
     """
     功能：同源托管 React 构建产物的静态资源与 SPA 子路由。
     入参：asset_path（str）：`/app` 之后的路径片段。
