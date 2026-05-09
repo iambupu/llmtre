@@ -14,14 +14,9 @@
       "discard_sandbox": ["回滚沙盒", "放弃沙盒", "取消沙盒"]
     },
     "target_aliases": {
-      "goblin_01": ["地精", "goblin"],
       "player_01": ["旅行者", "player"]
     },
-    "location_aliases": {
-      "road": ["路", "道路", "路上"],
-      "forest_edge": ["森林", "forest"],
-      "camp": ["营地", "camp"]
-    },
+    "location_aliases": {},
     "item_aliases": {
       "health_potion_01": ["药水", "potion"]
     }
@@ -96,56 +91,24 @@
       }
     }
   },
+  "default_story_policy": {
+    "mode": "open_seed",
+    "background": "unfixed",
+    "instruction": "默认剧本不是固定世界或固定关卡。每个新会话从空白、低约束的冒险起点生成，地点、目标、冲突、NPC 和线索都应由本次开场叙事临场创建；不要默认使用森林、营地、地精或任何固定背景。"
+  },
   "scene_defaults": {
     "locations": {
       "unknown": {
         "id": "unknown",
-        "name": "无名道路",
-        "description": "一段尚未完全记录在世界状态中的道路。",
-        "exits": [
-          {
-            "direction": "forward",
-            "location_id": "forest_edge",
-            "label": "森林边缘",
-            "aliases": ["森林", "前方", "继续", "路上", "前进"]
-          }
-        ],
-        "visible_items": [],
-        "active_quests": []
-      },
-      "forest_edge": {
-        "id": "forest_edge",
-        "name": "森林边缘",
-        "description": "树影压在道路尽头，灌木间偶尔传来细碎声响。",
-        "exits": [
-          {
-            "direction": "back",
-            "location_id": "camp",
-            "label": "营地",
-            "aliases": ["营地", "回去", "后方"]
-          }
-        ],
-        "visible_items": [],
-        "active_quests": []
-      },
-      "camp": {
-        "id": "camp",
-        "name": "临时营地",
-        "description": "篝火余温尚在，是短暂整理状态的安全地点。",
-        "exits": [
-          {
-            "direction": "forward",
-            "location_id": "forest_edge",
-            "label": "森林边缘",
-            "aliases": ["森林", "前方"]
-          }
-        ],
+        "name": "未定场景",
+        "description": "默认剧本未预设固定背景；本次冒险的地点、目标、NPC 与线索应由开场叙事临场生成。",
+        "exits": [{"location_id": "forest_edge", "label": "森林"}],
         "visible_items": [],
         "active_quests": []
       }
     },
     "available_actions": ["observe", "wait", "rest", "move", "talk", "inspect", "use_item", "attack"],
-    "suggested_actions": ["看看周围", "继续前进", "坐一会", "检查背包"]
+    "suggested_actions": ["观察当前局势", "确认眼前目标", "检查随身物品", "等待新的线索"]
   },
   "narrative_templates": {
     "invalid": "{actor_name}的行动未能成立：{errors}",

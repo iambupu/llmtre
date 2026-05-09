@@ -243,15 +243,21 @@ class WebSessionStore:
         sandbox_mode: bool,
         now_iso: str,
         memory_policy: dict[str, Any],
+        pack_metadata: dict[str, Any] | None = None,
+        persona_profile: dict[str, Any] | None = None,
     ) -> None:
         """
         功能：创建会话主记录。
         入参：session_id（str）：会话标识。character_id（str）：角色标识。
             sandbox_mode（bool）：沙盒开关。now_iso（str）：创建时间。
             memory_policy（dict[str, Any]）：记忆策略。
+            pack_metadata（dict[str, Any] | None，默认 None）：A2 pack 绑定摘要。
+            persona_profile（dict[str, Any] | None，默认 None）：玩家 persona 草案。
         出参：None。
         异常：会话主键冲突或 SQL 异常向上抛出。
         """
+        pack_metadata = pack_metadata or {}
+        persona_profile = persona_profile or {}
         with self._connect() as connection:
             connection.execute(
                 """
@@ -262,17 +268,27 @@ class WebSessionStore:
                     current_turn_id,
                     memory_summary,
                     memory_policy_json,
+                    pack_id,
+                    scenario_id,
+                    pack_version,
+                    compiled_artifact_hash,
+                    persona_profile_json,
                     created_at,
                     last_active_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, 0, '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
                     character_id,
                     int(sandbox_mode),
                     json.dumps(memory_policy, ensure_ascii=False),
+                    pack_metadata.get("pack_id"),
+                    pack_metadata.get("scenario_id"),
+                    pack_metadata.get("pack_version"),
+                    pack_metadata.get("compiled_artifact_hash"),
+                    json.dumps(persona_profile, ensure_ascii=False),
                     now_iso,
                     now_iso,
                     now_iso,
@@ -291,7 +307,9 @@ class WebSessionStore:
             row = connection.execute(
                 """
                 SELECT session_id, character_id, sandbox_mode, current_turn_id,
-                       memory_summary, memory_policy_json, created_at, last_active_at, updated_at
+                       memory_summary, memory_policy_json,
+                       pack_id, scenario_id, pack_version, compiled_artifact_hash,
+                       persona_profile_json, created_at, last_active_at, updated_at
                 FROM web_sessions
                 WHERE session_id = ?
                 """,
@@ -305,6 +323,10 @@ class WebSessionStore:
             if policy_raw
             else {"mode": "auto", "max_turns": 20}
         )
+        persona_raw = str(row["persona_profile_json"] or "{}")
+        persona_profile = json.loads(persona_raw) if persona_raw else {}
+        if not isinstance(persona_profile, dict):
+            persona_profile = {}
         return {
             "session_id": str(row["session_id"]),
             "character_id": str(row["character_id"]),
@@ -312,6 +334,11 @@ class WebSessionStore:
             "current_turn_id": int(row["current_turn_id"]),
             "memory_summary": str(row["memory_summary"] or ""),
             "memory_policy": memory_policy,
+            "pack_id": row["pack_id"],
+            "scenario_id": row["scenario_id"],
+            "pack_version": row["pack_version"],
+            "compiled_artifact_hash": row["compiled_artifact_hash"],
+            "persona_profile": persona_profile,
             "created_at": str(row["created_at"] or ""),
             "last_active_at": str(row["last_active_at"] or ""),
             "updated_at": str(row["updated_at"] or ""),
@@ -552,6 +579,8 @@ class WebSessionStore:
         now_iso: str,
         memory_policy: dict[str, Any],
         response_payload: dict[str, Any],
+        pack_metadata: dict[str, Any] | None = None,
+        persona_profile: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """
         功能：在单事务内完成 create_session 幂等命中检查、会话创建与幂等响应写入。
@@ -560,10 +589,14 @@ class WebSessionStore:
             sandbox_mode（bool）：沙盒开关；now_iso（str）：创建时间；
             memory_policy（dict[str, Any]）：会话记忆策略；
             response_payload（dict[str, Any]）：返回给客户端的幂等响应体。
+            pack_metadata（dict[str, Any] | None，默认 None）：A2 pack 绑定摘要；
+            persona_profile（dict[str, Any] | None，默认 None）：玩家 persona 草案。
         出参：tuple[dict[str, Any], bool]，第一个值为响应体；
             第二个值表示是否新创建（True=新创建，False=命中幂等）。
         异常：SQL/JSON 序列化异常向上抛出；事务自动回滚，避免会话与幂等键不一致。
         """
+        pack_metadata = pack_metadata or {}
+        persona_profile = persona_profile or {}
         response_json = json.dumps(response_payload, ensure_ascii=False)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -589,17 +622,27 @@ class WebSessionStore:
                     current_turn_id,
                     memory_summary,
                     memory_policy_json,
+                    pack_id,
+                    scenario_id,
+                    pack_version,
+                    compiled_artifact_hash,
+                    persona_profile_json,
                     created_at,
                     last_active_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, 0, '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
                     character_id,
                     int(sandbox_mode),
                     json.dumps(memory_policy, ensure_ascii=False),
+                    pack_metadata.get("pack_id"),
+                    pack_metadata.get("scenario_id"),
+                    pack_metadata.get("pack_version"),
+                    pack_metadata.get("compiled_artifact_hash"),
+                    json.dumps(persona_profile, ensure_ascii=False),
                     now_iso,
                     now_iso,
                     now_iso,

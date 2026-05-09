@@ -64,6 +64,53 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/story-packs:
+    get:
+      tags: [StoryPacks]
+      summary: 列出本地 Story Pack
+      description: 返回已通过 A2-Core 校验的本地 story_packs 摘要，以及未通过校验目录的诊断。
+      operationId: listStoryPacks
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListStoryPacksResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/story-packs/{pack_id}:
+    get:
+      tags: [StoryPacks]
+      summary: 获取 Story Pack 详情
+      description: 返回已校验 Story Pack 的 manifest、summary 与 scenes 预览。
+      operationId: getStoryPack
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]{3,64}$"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetStoryPackResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          description: Story Pack 不存在或未通过校验
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/sessions/{session_id}/turns:
     post:
       tags: [Turns]
@@ -118,6 +165,58 @@ paths:
                 $ref: "#/components/schemas/ListTurnsResponse"
         "404":
           $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/turns/stream:
+    post:
+      tags: [Turns]
+      summary: 执行一个回合（SSE 流式）
+      description: |
+        以 `text/event-stream` 返回回合执行进度与终止结果。
+        事件序列与实现保持一致：`received`、阶段 progress/detail、`gm_delta`、`done`、`error`。
+        终止语义：一次请求必须以 `done` 或 `error` 结束；`done` 负载与 `CreateTurnResponse` 同构。
+      operationId: createTurnStream
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTurnRequest"
+      responses:
+        "200":
+          description: |
+            流式执行成功建立连接。客户端需持续消费事件，直到收到 `done` 或 `error`。
+            `done` 的 data 负载与 `CreateTurnResponse` 字段同构（去掉外层 `ok` 包装）。
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                done:
+                  summary: 终止事件（成功）
+                  value: |
+                    event: done
+                    data: {"session_id":"sess_demo_01","session_turn_id":3,"runtime_turn_id":42,"trace_id":"trc_demo_01","request_id":"stream_0001","is_valid":true,"outcome":"valid_action","final_response":"你推开木门，听见屋内传来脚步声。"}
+                error:
+                  summary: 终止事件（失败）
+                  value: |
+                    event: error
+                    data: {"code":"INTERNAL_ERROR","message":"回合执行失败: ...","trace_id":"trc_demo_01"}
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/TurnConflict"
+        "504":
+          description: 回合执行超时（可能作为 SSE `error` 终止事件返回）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -420,6 +519,7 @@ components:
             - SHADOW_STATE_NOT_FOUND
             - MODEL_UNAVAILABLE
             - TURN_TIMEOUT
+            - PACK_NOT_FOUND
             - INTERNAL_ERROR
         message:
           type: string
@@ -452,6 +552,82 @@ components:
       additionalProperties:
         type: string
       description: 透传给服务端的会话附加元信息。
+
+    StoryPackSummary:
+      type: object
+      required:
+        - pack_id
+        - title
+        - version
+        - scenario_id
+        - start_scene_id
+        - compiled_artifact_hash
+        - scene_count
+        - interaction_count
+        - diagnostics
+      properties:
+        pack_id:
+          type: string
+        title:
+          type: string
+        version:
+          type: string
+        scenario_id:
+          type: string
+        start_scene_id:
+          type: string
+        compiled_artifact_hash:
+          type: string
+        scene_count:
+          type: integer
+          minimum: 0
+        interaction_count:
+          type: integer
+          minimum: 0
+        diagnostics:
+          type: array
+          items:
+            type: string
+
+    ListStoryPacksResponse:
+      type: object
+      required: [ok, trace_id, packs, diagnostics]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        packs:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryPackSummary"
+        diagnostics:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+
+    GetStoryPackResponse:
+      type: object
+      required: [ok, trace_id, summary, manifest, scenes]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        summary:
+          $ref: "#/components/schemas/StoryPackSummary"
+        manifest:
+          type: object
+          additionalProperties: true
+        scenes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
 
     CharacterStatusEffect:
       type: object
@@ -530,6 +706,17 @@ components:
             sandbox_mode:
               type: boolean
               default: false
+            pack_id:
+              type: string
+              nullable: true
+              description: A2-Core 本地 Story Pack ID。不传则使用 engine default 内容层。
+            scenario_id:
+              type: string
+              nullable: true
+              default: default
+            persona_profile:
+              type: object
+              additionalProperties: true
             metadata:
               $ref: "#/components/schemas/SessionMetadata"
     CreateSessionResponse:
@@ -553,6 +740,21 @@ components:
           $ref: "#/components/schemas/SessionTurnId"
         created_at:
           $ref: "#/components/schemas/IsoTime"
+        pack_id:
+          type: string
+          nullable: true
+        scenario_id:
+          type: string
+          nullable: true
+        pack_version:
+          type: string
+          nullable: true
+        compiled_artifact_hash:
+          type: string
+          nullable: true
+        persona_profile:
+          type: object
+          additionalProperties: true
         active_character:
           $ref: "#/components/schemas/ActiveCharacter"
 
@@ -575,6 +777,21 @@ components:
           $ref: "#/components/schemas/SessionTurnId"
         last_active_at:
           $ref: "#/components/schemas/IsoTime"
+        pack_id:
+          type: string
+          nullable: true
+        scenario_id:
+          type: string
+          nullable: true
+        pack_version:
+          type: string
+          nullable: true
+        compiled_artifact_hash:
+          type: string
+          nullable: true
+        persona_profile:
+          type: object
+          additionalProperties: true
         active_character:
           $ref: "#/components/schemas/ActiveCharacter"
 
@@ -639,6 +856,32 @@ components:
           type: array
           items:
             type: string
+        quick_action_candidates:
+          type: array
+          description: GM 输出的结构化候选动作，供前端落桶与调试，不作为动作合法性来源。
+          items:
+            type: object
+            additionalProperties: true
+        quick_action_groups:
+          type: object
+          description: 后端按当前场景与临近场景分组后的快捷动作。
+          properties:
+            current:
+              type: array
+              items:
+                type: string
+            nearby:
+              type: array
+              items:
+                type: string
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        quick_action_layout:
+          type: object
+          description: 后端构造的对象交互布局，包含公共动作、对象动作与诊断信息。
+          additionalProperties: true
         affordances:
           type: array
           items:

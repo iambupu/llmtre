@@ -1,0 +1,13 @@
+{
+  "pack_id": "demo_a2_core",
+  "version": "0.1.0",
+  "title": "雾林边境",
+  "author": "TRE Team",
+  "scenario_id": "default",
+  "start_scene_id": "forest_edge",
+  "supported_actions": ["observe", "move", "talk", "inspect"],
+  "lore_files": ["world.md"],
+  "rules_overlay": {
+    "narrative_style": "低魔、克制、重视环境线索"
+  }
+}

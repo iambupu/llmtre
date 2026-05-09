@@ -44,6 +44,11 @@ export type SessionPayload = {
   character_id?: string;
   current_session_turn_id?: number;
   sandbox_mode?: boolean;
+  pack_id?: string | null;
+  scenario_id?: string | null;
+  pack_version?: string | null;
+  compiled_artifact_hash?: string | null;
+  persona_profile?: Record<string, unknown>;
   quick_actions?: string[];
   quick_action_candidates?: Array<{
     canonical_intent_key: string;
@@ -61,6 +66,23 @@ export type SessionPayload = {
   active_character?: ActiveCharacter | null;
   scene_snapshot?: SceneSnapshot | null;
   memory_summary?: string;
+};
+
+export type StoryPackSummary = {
+  pack_id: string;
+  title: string;
+  version: string;
+  scenario_id: string;
+  start_scene_id: string;
+  compiled_artifact_hash: string;
+  scene_count: number;
+  interaction_count: number;
+  diagnostics: string[];
+};
+
+export type StoryPackListPayload = {
+  packs: StoryPackSummary[];
+  diagnostics: Record<string, string[]>;
 };
 
 export type SceneAffordance = {

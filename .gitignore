@@ -19,6 +19,7 @@
 .coverage
 coverage.xml
 htmlcov/
+/pytest*/
 
 # 构建与打包产物
 build/
@@ -54,5 +55,7 @@ dist/
 /.code_md/
 /.coding_docs/
 
-# 本地临时目录
+# 本地临时目录与工具工作区
 /tmp_pytest*/
+/.sisyphus/
+/thoughts/

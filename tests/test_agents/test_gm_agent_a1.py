@@ -158,12 +158,12 @@ def test_gm_quick_actions_prioritize_affordances() -> None:
     assert actions[:3] == ["前往北门", "询问守卫", "观察周围"]
 
 
-def test_gm_quick_actions_drop_unmapped_generated_actions(monkeypatch) -> None:
+def test_gm_quick_actions_keep_dynamic_generated_actions(monkeypatch) -> None:
     """
-    功能：验证 LLM/隐藏块生成的快捷行动必须映射到 enabled affordance 才能返回。
+    功能：验证 LLM/隐藏块生成的快捷行动优先作为本轮动态建议返回。
     入参：monkeypatch：注入模型输出。
     出参：None。
-    异常：断言失败表示 GM 重新允许越权快捷行动进入前端按钮。
+    异常：断言失败表示 GM 又把本轮动态建议覆盖成旧场景 affordance。
     """
     agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
     agent.llm_enabled = True
@@ -171,19 +171,23 @@ def test_gm_quick_actions_drop_unmapped_generated_actions(monkeypatch) -> None:
     monkeypatch.setattr(
         "urllib.request.urlopen",
         lambda *args, **kwargs: _Response(
-            '{"response":"叙事<quick_actions>[\\"凭空飞走\\"]</quick_actions>"}'.encode()
+            (
+                '{"response":"叙事<quick_actions>[\\"检查地精伤口的符文\\",'
+                '\\"使用治疗药水\\",\\"继续攻击地精\\",\\"前往森林边缘\\"]'
+                '</quick_actions>"}'
+            ).encode()
         ),
     )
     state = {
         "scene_snapshot": {
-            "affordances": [{"enabled": True, "user_input": "观察周围"}],
+            "affordances": [{"enabled": True, "user_input": "攻击瘦弱的地精"}],
         }
     }
 
     text = agent.render(state)
     actions = agent.suggest_quick_actions(state, text)
 
-    assert actions == ["观察周围"]
+    assert actions == ["检查地精伤口的符文", "使用治疗药水", "继续攻击地精", "前往森林边缘"]
 
 
 def test_gm_fallback_quick_actions_deduplicate_and_limit_to_four() -> None:
@@ -325,10 +329,10 @@ def test_gm_stream_response_filters_hidden_blocks_and_keeps_quick_actions(
     agent.llm_enabled = True
     agent.llm_config = {"provider": "ollama", "model": "stream-model"}
     lines = [
-        '{"response":"正文一<think>隐藏"}\n'.encode(),
+        '{"response":"<trpg_narrative>正文一<think>隐藏"}\n'.encode(),
         b"not-json\n",
         '{"response":"内容</think>正文二<quick_actions>[\\"观察门\\",\\"询问人\\"]"}\n'.encode(),
-        '{"response":"</quick_actions>结尾","done":true}\n'.encode(),
+        '{"response":"</quick_actions>结尾</trpg_narrative>","done":true}\n'.encode(),
     ]
     monkeypatch.setattr(
         "urllib.request.urlopen",
@@ -357,6 +361,34 @@ def test_gm_stream_response_filters_hidden_blocks_and_keeps_quick_actions(
     assert chunks == ["正文一", "正文二", "结尾"]
     assert actions == ["观察门", "询问人"]
     assert "GM LLM 流式响应行无法解析，已跳过" in caplog.text
+
+
+def test_gm_non_stream_response_removes_trpg_narrative_tags(monkeypatch) -> None:
+    """
+    功能：验证非流式 GM 输出会移除 `<trpg_narrative>` 包装标签但保留正文与快捷动作。
+    入参：monkeypatch：注入非流式 LLM 响应。
+    出参：None。
+    异常：断言失败表示模型协议包装标签又泄漏到前端可见文本。
+    """
+    agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
+    agent.llm_enabled = True
+    agent.llm_config = {"provider": "ollama", "model": "test-model"}
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: _Response(
+            (
+                '{"response":"<trpg_narrative>正文</trpg_narrative>'
+                '<quick_actions>[\\"检查符文\\"]</quick_actions>"}'
+            ).encode()
+        ),
+    )
+    state = {"scene_snapshot": {"affordances": []}}
+
+    text = agent.render(state)
+    actions = agent.suggest_quick_actions(state, text)
+
+    assert text == "正文"
+    assert actions == ["检查符文"]
 
 
 def test_gm_embedded_quick_actions_are_request_local(monkeypatch) -> None:
@@ -396,8 +428,8 @@ def test_gm_embedded_quick_actions_are_request_local(monkeypatch) -> None:
 
     assert text_a == "甲叙事"
     assert text_b == "乙叙事"
-    assert actions_a == ["甲行动一"]
-    assert actions_b == ["乙行动一"]
+    assert actions_a == ["甲行动一", "甲行动二"]
+    assert actions_b == ["乙行动一", "乙行动二"]
 
 
 def test_gm_stream_callback_failure_is_logged_and_stream_continues(

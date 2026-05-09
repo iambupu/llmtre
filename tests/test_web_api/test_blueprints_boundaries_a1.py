@@ -287,7 +287,7 @@ def test_sessions_create_rejects_invalid_request_character_and_missing_character
         sessions,
         "get_runtime_context",
         lambda: SimpleNamespace(
-            session_store=SimpleNamespace(get_idempotent_response=lambda **_kwargs: None)
+            session_store=SimpleNamespace(get_idempotent_response=lambda *args, **kwargs: None)
         ),
     )
     invalid_character = client.post(

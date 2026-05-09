@@ -2,6 +2,41 @@
 
 本文件记录 TRE / llmtre 的用户可见变化、发布门禁和重要兼容说明。
 
+## [0.1.0-a2] - 2026-05-09
+
+### Added
+
+- 新增 Story Pack v0 系统：`state/contracts/story_pack.py`（SceneContract、LoreEntry、InteractionRule、CharacterContract v2、StoryPackManifest）。
+- 新增 `tools/packs/registry.py`：StoryPackRegistry 与 validate_story_pack 校验器。
+- 新增 `tools/packs/validate.py` CLI 入口，支持 `python -m tools.packs.validate <pack>` 命令行校验。
+- 新增 `web_api/blueprints/story_packs.py` Blueprint，提供 `GET /api/story-packs` 列表与 `GET /api/story-packs/<pack_id>` 详细信息（manifest/scenes）端点。
+- 新增 `web_api/blueprints/sessions.py` 中 `pack_id`/`scenario_id` 的会话创建绑定与 idempotency 预检查。
+- 新增 `state/tools/runtime_schema.py` ALTER TABLE IF NOT EXISTS，为 sessions 表追加 5 个 A2 剧本运行时状态列。
+- 新增 `game_workflows/main_loop_config.py` 中 `default_story_policy` 配置字段。
+- 新增 `story_packs/demo_a2_core/` 演示剧本包（3 个场景、4 个交互入口、1 条 lore）。
+- 新增 `config/api/openapi.yaml` StoryPacks API 端点规范。
+- 新增 `tests/test_web_api/test_sessions_a2.py` A2 会话绑定回归测试。
+
+### Changed
+
+- `get_idempotent_response` 签名扩展：新增 `scope`、`session_id`、`request_id` 参数。
+- `play_state` 的 `init_state` 现在包含 `pack_metadata`。
+- NLU 策略调整：从 `DEFAULT_MAIN_LOOP_RULES` 中清除 3 条硬编码 location_aliases（`r_entrance`、`ruins_entrance`、`遗迹入口`），改由 StoryPack 驱动的场景上下文提供。
+- sessions 表通过运行期 schema 追加剧本运行时状态列。
+
+### Verification
+
+- pytest: 341 passed, 0 failed（`python -m pytest tests -q`）
+- ruff: All checks passed（`python -m ruff check .`）
+- mypy: Success（`python -m mypy .` — 98 source files, 0 errors）
+- 发布前代码审查：P0 无 / P1 4/4 闭环 / P2 3/3 闭环。合入判断：可发布。
+
+### Known Notes
+
+- Story Pack v0 为本地 JSON 文件夹格式，manifest/scenes/lore 文件需通过 CLI 校验通过后方可注册到运行时。
+- 非法或未通过校验的 pack 不会出现在 API 响应中，也不会污染数据库会话表。
+- demo_a2_core 包与 A1 默认场景共存；创建会话时未指定 pack_id 的行为与 A1 一致。
+
 ## [0.1.0-a1] - 2026-05-07
 
 ### Added

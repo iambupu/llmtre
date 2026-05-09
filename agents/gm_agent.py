@@ -54,6 +54,8 @@ class GMAgent:
         """
         self.event_bus = event_bus
         loaded_rules = rules if rules is not None else load_main_loop_rules()
+        # 配置来源：GM prompt 需要读取默认剧本策略；保存完整规则快照，避免只保留模板导致策略丢失。
+        self.rules = loaded_rules
         self.templates = loaded_rules.get("narrative_templates", {})
         self.model_binding_key = model_binding_key
         self.model_binding = get_agent_model_binding(model_binding_key)
@@ -199,7 +201,7 @@ class GMAgent:
                     base_url,
                     self.llm_timeout_seconds,
                 )
-                return self._remove_quick_actions_block(text).strip()
+                return self._clean_visible_response(text).strip()
             self._log_llm_failure(
                 "empty_response",
                 "ollama response 字段为空",
@@ -286,11 +288,11 @@ class GMAgent:
                 break
         full_text = self._remove_thinking_blocks("".join(chunks))
         state[GM_GENERATED_QUICK_ACTIONS_KEY] = self._parse_embedded_quick_actions(full_text)
-        return self._remove_quick_actions_block(full_text).strip()
+        return self._clean_visible_response(full_text).strip()
 
     def _filter_hidden_delta(self, delta: str, hidden_tag: str) -> tuple[str, str]:
         """
-        功能：从增量文本中过滤 `<think>` 和 `<quick_actions>` 隐藏块。
+        功能：从增量文本中过滤隐藏块与叙事包装标签，只把可见正文推给前端。
         入参：delta（str）：模型本次返回片段；hidden_tag（str）：当前未闭合隐藏标签。
         出参：tuple[str, str]，可展示片段和新的隐藏标签状态。
         异常：不抛异常；标签不完整时按当前状态保守过滤。
@@ -314,13 +316,34 @@ class GMAgent:
             ]
             starts = [(pos, tag) for pos, tag in starts if pos >= 0]
             if not starts:
-                visible.append(delta[index:])
+                visible.append(self._remove_narrative_tags(delta[index:]))
                 break
             start, tag = min(starts, key=lambda item: item[0])
-            visible.append(delta[index:start])
+            visible.append(self._remove_narrative_tags(delta[index:start]))
             index = start + len(f"<{tag}>")
             hidden_tag = tag
         return "".join(visible), hidden_tag
+
+    def _clean_visible_response(self, text: str) -> str:
+        """
+        功能：清理模型协议标签，返回可展示、可落库的叙事正文。
+        入参：text（str）：模型完整响应，可能包含 think、quick_actions 与 trpg_narrative 标签。
+        出参：str，移除隐藏块和叙事包装标签后的文本。
+        异常：不抛异常；未闭合隐藏块按既有降级策略截断尾部，避免协议内容外泄到前端。
+        """
+        # 事务边界：这里只做展示文本清洗，不解析动作、不写状态，快捷动作仍由专门解析函数处理。
+        without_thinking = self._remove_thinking_blocks(text)
+        without_actions = self._remove_quick_actions_block(without_thinking)
+        return self._remove_narrative_tags(without_actions)
+
+    def _remove_narrative_tags(self, text: str) -> str:
+        """
+        功能：移除 `<trpg_narrative>` 叙事包装标签，保留标签内部正文。
+        入参：text（str）：完整响应或流式可见片段。
+        出参：str，不含叙事包装标签的文本。
+        异常：不抛异常；标签缺失时原样返回，大小写不匹配时按原样降级。
+        """
+        return text.replace("<trpg_narrative>", "").replace("</trpg_narrative>", "")
 
     def _remove_thinking_blocks(self, text: str) -> str:
         """
@@ -377,30 +400,30 @@ class GMAgent:
 
     def suggest_quick_actions(self, state: dict[str, Any], final_response: str) -> list[str]:
         """
-        功能：基于本回合输出和场景快照生成 4 个可点击快捷行动。
+        功能：基于本回合输出和场景快照生成 4 个可点击快捷行动，优先保留本次 GM 隐藏块的动态建议。
         入参：state（dict[str, Any]）：当前主循环状态；final_response（str）：本回合叙事输出。
         出参：list[str]，最多 4 条可直接作为玩家输入的中文短句。
-        异常：LLM 调用、JSON 解析或格式异常均内部降级到场景建议动作，不影响回合完成。
+        异常：LLM 调用、JSON 解析或格式异常均内部降级到场景建议动作；
+            隐藏块解析失败时返回空并继续兜底。
         """
-        affordance_actions = self._affordance_quick_actions(state)
         generated_actions: list[str] = []
         embedded_actions = state.get(GM_GENERATED_QUICK_ACTIONS_KEY)
         if isinstance(embedded_actions, list):
             generated_actions = [
                 str(action).strip() for action in embedded_actions if str(action).strip()
             ]
+        # 请求边界：render 已解析本轮动态按钮时，以隐藏块为准，
+        # 避免二次 LLM 或 affordance 覆盖模型给出的上下文短句。
+        if generated_actions:
+            ranked_affordance = self._rank_affordance_quick_actions(state, final_response)
+            return self._merge_actions(generated_actions, ranked_affordance, limit=4)
         if self.llm_enabled:
             llm_actions = self._suggest_quick_actions_with_llm(state, final_response)
             if llm_actions:
                 generated_actions = llm_actions
-        if affordance_actions and generated_actions:
-            normalized_generated = self._normalize_generated_actions(
-                generated_actions,
-                affordance_actions,
-            )
-            if normalized_generated:
-                ranked_affordance = self._rank_affordance_quick_actions(state, final_response)
-                return self._merge_actions(normalized_generated, ranked_affordance, limit=4)
+        if generated_actions:
+            ranked_affordance = self._rank_affordance_quick_actions(state, final_response)
+            return self._merge_actions(generated_actions, ranked_affordance, limit=4)
         ranked_affordance = self._rank_affordance_quick_actions(state, final_response)
         if ranked_affordance:
             return ranked_affordance[:4]
@@ -1001,6 +1024,7 @@ class GMAgent:
             "scene_snapshot": scene,
             "recent_memory": scene.get("recent_memory", ""),
             "rag_context": state.get("rag_context", ""),
+            "default_story_policy": self.rules.get("default_story_policy", {}),
         }
         state_json = json.dumps(compact_state, ensure_ascii=False)
         return (

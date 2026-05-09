@@ -23,12 +23,14 @@ from game_workflows.main_loop_config import load_main_loop_rules
 from state.contracts.turn import TurnRequestContext, TurnTrace, TurnTraceStage
 from state.tools.db_initializer import DB_PATH, DBInitializer
 from state.tools.runtime_schema import ensure_runtime_tables
+from tools.packs.registry import StoryPackRegistry
 from web_api.session_store import WebSessionStore
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 REGISTRY_PATH = os.path.join(BASE_DIR, "config", "mod_registry.yml")
 MODS_ROOT = os.path.join(BASE_DIR, "mods")
 ITEMS_DATA_PATH = os.path.join(BASE_DIR, "state", "data", "items.json")
+STORY_PACKS_ROOT = os.path.join(BASE_DIR, "story_packs")
 VECTOR_DOCSTORE_PATH = os.path.join(
     BASE_DIR,
     "knowledge_base",
@@ -308,7 +310,8 @@ def _build_quick_action_layout(
             continue
         unmatched_actions.append(action_text)
 
-    # 降级路径：quick_actions 只能映射回 enabled affordance/slot；未匹配文本只进入诊断。
+    # 降级路径：场景布局只接受 enabled affordance/slot；
+    # 回合内动态 quick_actions 留在旁白消息按钮，不写入公共快捷操作。
     for raw_action in quick_actions:
         action_text = str(raw_action).strip()
         semantic_key = _normalize_quick_action_semantic_key(action_text)
@@ -421,6 +424,7 @@ class ApiRuntimeContext:
         """
         self.main_loop: MainEventLoop | None = None
         self.session_store = WebSessionStore(DB_PATH)
+        self.story_pack_registry = StoryPackRegistry(STORY_PACKS_ROOT)
         self.session_locks: dict[str, Any] = {}
         self.session_locks_guard = threading.Lock()
 
@@ -513,6 +517,12 @@ def initialize_runtime(app: Flask) -> None:
     _ensure_runtime_ready()
     event_bus = EventBus(registry_path=REGISTRY_PATH, mods_root=MODS_ROOT)
     context = ApiRuntimeContext()
+    context.story_pack_registry.refresh()
+    logger.info(
+        "A2 Story Pack registry 加载完成: valid=%s invalid=%s",
+        len(context.story_pack_registry.list_summaries()),
+        len(context.story_pack_registry.diagnostics()),
+    )
     # 配置来源：MainEventLoop 会读取 config/main_loop_rules.json 的 outer_loop.default_bridge；
     # Web 层不显式覆盖外环桥，避免 API 路径把 state_changed/turn_ended 投递降级为 noop。
     context.main_loop = MainEventLoop(event_bus=event_bus)

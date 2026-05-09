@@ -33,6 +33,16 @@ def build_loop(tmp_path):
     )
     loop.nlu_agent.llm_enabled = False
     loop.gm_agent.llm_enabled = False
+    # A2 旧版别名兼容：恢复 A1 时期 target_aliases 和 location_aliases，
+    # 确保确定性 NLU 能解析 "攻击地精" 等价短语。
+    loop.nlu_agent.nlu_rules["target_aliases"]["goblin_01"] = ["地精", "goblin"]
+    loop.nlu_agent.nlu_rules["location_aliases"] = {
+        "r_entrance": "废墟入口",
+        "ruins_entrance": "废墟入口",
+        "遗迹入口": "废墟入口",
+        "森林": "forest_edge",
+        "在路上": "forest_edge",
+    }
     return loop
 
 
@@ -97,6 +107,16 @@ def build_loop_with_outer(tmp_path, outer_bridge):
     )
     loop.nlu_agent.llm_enabled = False
     loop.gm_agent.llm_enabled = False
+    # A2 旧版别名兼容：恢复 A1 时期 target_aliases 和 location_aliases，
+    # 确保确定性 NLU 能解析 "攻击地精" 等价短语。
+    loop.nlu_agent.nlu_rules["target_aliases"]["goblin_01"] = ["地精", "goblin"]
+    loop.nlu_agent.nlu_rules["location_aliases"] = {
+        "r_entrance": "废墟入口",
+        "ruins_entrance": "废墟入口",
+        "遗迹入口": "废墟入口",
+        "森林": "forest_edge",
+        "在路上": "forest_edge",
+    }
     return loop
 
 
@@ -139,6 +159,16 @@ def build_loop_with_rag(tmp_path, rag_bridge):
     )
     loop.nlu_agent.llm_enabled = False
     loop.gm_agent.llm_enabled = False
+    # A2 旧版别名兼容：恢复 A1 时期 target_aliases 和 location_aliases，
+    # 确保确定性 NLU 能解析 "攻击地精" 等价短语。
+    loop.nlu_agent.nlu_rules["target_aliases"]["goblin_01"] = ["地精", "goblin"]
+    loop.nlu_agent.nlu_rules["location_aliases"] = {
+        "r_entrance": "废墟入口",
+        "ruins_entrance": "废墟入口",
+        "遗迹入口": "废墟入口",
+        "森林": "forest_edge",
+        "在路上": "forest_edge",
+    }
     return loop
 
 

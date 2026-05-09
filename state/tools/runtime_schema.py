@@ -101,12 +101,27 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
             current_turn_id INTEGER NOT NULL DEFAULT 0,
             memory_summary TEXT NOT NULL DEFAULT '',
             memory_policy_json TEXT NOT NULL DEFAULT '{"mode":"auto","max_turns":20}',
+            pack_id TEXT,
+            scenario_id TEXT,
+            pack_version TEXT,
+            compiled_artifact_hash TEXT,
+            persona_profile_json TEXT NOT NULL DEFAULT '{}',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    # A2-Core 迁移边界：旧会话允许 pack 字段为空，表示继续使用 engine default 内容层。
+    for column_name, column_sql in (
+        ("pack_id", "pack_id TEXT"),
+        ("scenario_id", "scenario_id TEXT"),
+        ("pack_version", "pack_version TEXT"),
+        ("compiled_artifact_hash", "compiled_artifact_hash TEXT"),
+        ("persona_profile_json", "persona_profile_json TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if not _table_has_column(cursor, "web_sessions", column_name):
+            cursor.execute(f"ALTER TABLE web_sessions ADD COLUMN {column_sql}")
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS web_session_turns (

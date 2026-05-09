@@ -61,13 +61,9 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
             "discard_sandbox": ["回滚沙盒", "放弃沙盒", "取消沙盒"],
         },
         "target_aliases": {
-            "goblin_01": ["地精", "goblin"],
             "player_01": ["旅行者", "player"],
         },
-        "location_aliases": {
-            "forest_edge": ["森林", "forest"],
-            "camp": ["营地", "camp"],
-        },
+        "location_aliases": {},
         "item_aliases": {
             "health_potion_01": ["药水", "potion"],
         },
@@ -94,6 +90,15 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
     "memory": {
         "summary_step": 0,
         "summary_context_size": 20,
+    },
+    "default_story_policy": {
+        "mode": "open_seed",
+        "background": "unfixed",
+        "instruction": (
+            "默认剧本不是固定世界或固定关卡。每个新会话从空白、低约束的冒险起点生成，"
+            "地点、目标、冲突、NPC 和线索都应由本次开场叙事临场创建；"
+            "不要默认使用森林、营地、地精或任何固定背景。"
+        ),
     },
     "character_status": {
         "stable_summary": "状态稳定",

@@ -427,7 +427,7 @@ def test_sessions_memory_runtime_idempotent_have_log_evidence(
         json={"request_id": "req_a1idem_log03", "keep_character": True},
     )
 
-    assert "create_session 幂等命中" in caplog.text
+    assert "create_session 幂等预命中" in caplog.text
     assert "refresh_memory 幂等命中" in caplog.text
     assert "reset_session 幂等命中" in caplog.text
 
@@ -656,10 +656,10 @@ def test_get_play_state_and_build_initial_turn_payload_cover_main_paths(
 
 def test_quick_action_layout_drops_unmatched_actions() -> None:
     """
-    功能：验证快捷动作布局只接纳 enabled affordance，可疑文本仅进入诊断信息。
+    功能：验证场景快捷布局只接纳 enabled affordance，回合动态文案不覆盖公共快捷操作。
     入参：无，使用内联 scene_snapshot。
     出参：None。
-    异常：断言失败表示未授权 quick_action 又进入了可点击布局。
+    异常：断言失败表示回合内快捷动作又污染了场景公共布局。
     """
     scene_snapshot = {
         "current_location": {"id": "camp"},
@@ -686,17 +686,19 @@ def test_quick_action_layout_drops_unmatched_actions() -> None:
 
     groups = _build_quick_action_groups(
         scene_snapshot,
-        ["观察周围", "凭空飞走", "前往森林"],
+        ["观察周围", "检查地精伤口的符文", "凭空飞走", "前往森林"],
     )
     layout = _build_quick_action_layout(
         scene_snapshot,
-        ["观察周围", "凭空飞走", "前往森林"],
+        ["观察周围", "检查地精伤口的符文", "凭空飞走", "前往森林"],
         [{"canonical_intent_key": "generic_action", "display_text": "凭空飞走"}],
     )
 
     assert groups == {"current": ["观察周围"], "nearby": ["前往森林"]}
     assert layout["common_actions"] == ["观察周围"]
     assert layout["object_actions"] == {"exit:forest": ["前往森林"]}
+    assert layout["diagnostics"]["unmatched_to_common"] == 0
+    assert "检查地精伤口的符文" in layout["diagnostics"]["unmapped_actions"]
     assert "凭空飞走" in layout["diagnostics"]["unmapped_actions"]
 
 

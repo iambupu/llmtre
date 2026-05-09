@@ -453,5 +453,5 @@ python -m tools.logs.check_runtime_logs
 
 ## 版本信息
 
-- 当前版本：A1（Alpha 1）
+- 当前版本：A2（Alpha 2）
 - 更新日志：见 [CHANGELOG.md](CHANGELOG.md)

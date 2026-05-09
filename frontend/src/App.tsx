@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArchiveIcon,
   BotIcon,
@@ -32,7 +32,9 @@ import {
   UserRoundIcon,
   WandSparklesIcon,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { createSession, getSession } from "@/api/sessions";
+import { listStoryPacks } from "@/api/storyPacks";
 import { createTurn } from "@/api/turns";
 import { commitSandbox, discardSandbox } from "@/api/sandbox";
 import { getMemory, refreshMemory } from "@/api/memory";
@@ -60,7 +62,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -80,6 +81,7 @@ import type {
   SceneObjectRef,
   SceneSnapshot,
   SessionPayload,
+  StoryPackSummary,
   TurnResult,
 } from "@/types";
 
@@ -122,6 +124,7 @@ type PersistedAppState = {
   turnData: TurnResult | null;
   memoryText: string;
   messages: ChatMessage[];
+  selectedPackId: string;
 };
 
 function nowClock(): string {
@@ -536,6 +539,7 @@ export function App() {
   const [turnData, setTurnData] = useState<TurnResult | null>(null);
   const [memoryText, setMemoryText] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [selectedPackId, setSelectedPackId] = useState("");
   const [didHydrate, setDidHydrate] = useState(false);
   const [lastBackendPayload, setLastBackendPayload] = useState<unknown>(null);
 
@@ -552,6 +556,11 @@ export function App() {
   const logs = useDebugStore((s) => s.logs);
 
   const stream = useTurnStream();
+  const storyPacksQuery = useQuery({
+    queryKey: ["story-packs"],
+    queryFn: listStoryPacks,
+    staleTime: 30_000,
+  });
   const scene = turnData?.scene_snapshot ?? sessionData?.scene_snapshot ?? null;
   const activeCharacter: ActiveCharacter | null =
     turnData?.active_character ?? sessionData?.active_character ?? null;
@@ -578,6 +587,8 @@ export function App() {
     "";
   const sessionTurn =
     turnData?.session_turn_id ?? sessionData?.current_session_turn_id ?? 0;
+  const storyPacks = storyPacksQuery.data?.packs ?? [];
+  const selectedPack = storyPacks.find((pack) => pack.pack_id === selectedPackId) ?? null;
 
   useEffect(() => {
     try {
@@ -597,6 +608,7 @@ export function App() {
       setSessionData((parsed.sessionData as SessionPayload | null) ?? null);
       setTurnData((parsed.turnData as TurnResult | null) ?? null);
       setMemoryText(typeof parsed.memoryText === "string" ? parsed.memoryText : "");
+      setSelectedPackId(typeof parsed.selectedPackId === "string" ? parsed.selectedPackId : "");
       setMessages(Array.isArray(parsed.messages) ? (parsed.messages as ChatMessage[]) : initialMessages);
     } catch {
       sessionStorage.removeItem(PLAY_SESSION_STORAGE_KEY);
@@ -617,6 +629,7 @@ export function App() {
       turnData,
       memoryText,
       messages,
+      selectedPackId,
     };
     sessionStorage.setItem(PLAY_SESSION_STORAGE_KEY, JSON.stringify(payload));
   }, [
@@ -628,6 +641,7 @@ export function App() {
     turnData,
     memoryText,
     messages,
+    selectedPackId,
   ]);
 
   const createSessionMutation = useMutation({
@@ -635,18 +649,25 @@ export function App() {
       createSession({
         character_id: characterId || undefined,
         sandbox_mode: false,
+        pack_id: selectedPackId || undefined,
+        scenario_id: selectedPackId ? selectedPack?.scenario_id ?? "default" : undefined,
       }),
     onSuccess: (payload) => {
       setSessionId(payload.session_id);
       if (payload.character_id) {
         setCharacterId(payload.character_id);
       }
+      setSelectedPackId(payload.pack_id ?? selectedPackId);
       setSessionData(payload);
       setTurnData(null);
       setMemoryText(payload.memory_summary ?? "");
       setMessages(buildOpeningMessages(payload));
       setLastBackendPayload(payload);
-      addLog(`已创建会话: ${payload.session_id}`);
+      addLog(
+        payload.pack_id
+          ? `已创建会话: ${payload.session_id} / pack=${payload.pack_id}`
+          : `已创建会话: ${payload.session_id}`
+      );
     },
     onError: (err) => appendError(err),
   });
@@ -658,6 +679,7 @@ export function App() {
       if (payload.character_id) {
         setCharacterId(payload.character_id);
       }
+      setSelectedPackId(payload.pack_id ?? "");
       setTurnData(null);
       setMemoryText(payload.memory_summary ?? "");
       setLastBackendPayload(payload);
@@ -804,7 +826,7 @@ export function App() {
               </p>
             </div>
           </div>
-          <div className="grid flex-1 gap-2 md:grid-cols-[minmax(170px,1fr)_minmax(220px,1.2fr)_auto_auto_auto_auto_auto]">
+          <div className="grid flex-1 gap-2 md:grid-cols-[minmax(170px,1fr)_minmax(220px,1.2fr)_minmax(220px,1.2fr)_auto_auto_auto_auto_auto]">
             <div className="relative">
               <UserRoundIcon data-icon="inline-start" className="pointer-events-none absolute top-2.5 left-2.5 text-muted-foreground" />
               <Input className="pl-9" value={characterId} onChange={(e) => setCharacterId(e.target.value)} />
@@ -812,6 +834,22 @@ export function App() {
             <div className="relative">
               <Link2Icon data-icon="inline-start" className="pointer-events-none absolute top-2.5 left-2.5 text-muted-foreground" />
               <Input className="pl-9" value={sessionId} onChange={(e) => setSessionId(e.target.value)} placeholder="sess_xxx" />
+            </div>
+            <div className="relative">
+              <PackageIcon data-icon="inline-start" className="pointer-events-none absolute top-2.5 left-2.5 text-muted-foreground" />
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-9 text-sm shadow-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                value={selectedPackId}
+                onChange={(event) => setSelectedPackId(event.target.value)}
+                disabled={isBusy || storyPacksQuery.isLoading}
+              >
+                <option value="">默认剧本</option>
+                {storyPacks.map((pack: StoryPackSummary) => (
+                  <option key={pack.pack_id} value={pack.pack_id}>
+                    {pack.title} · {pack.version}
+                  </option>
+                ))}
+              </select>
             </div>
             <Button onClick={() => createSessionMutation.mutate()} disabled={isBusy || createSessionMutation.isPending}>
               {createSessionMutation.isPending ? <LoaderCircleIcon data-icon="inline-start" className="animate-spin" /> : <PlusCircleIcon data-icon="inline-start" />}
@@ -938,6 +976,14 @@ export function App() {
   );
 }
 
+/**
+ * 功能：渲染当前场景总览，并将 NPC 与地点对象拆分为视觉独立的交互区域。
+ * 入参：scene（SceneSnapshot | null）：后端场景快照；turnData（TurnResult | null）：最近回合；
+ *   isBusy（boolean）：回合请求状态；sceneQuickActionLayout（SceneQuickActionLayout）：场景动作布局；
+ *   onSubmit（函数）：提交快捷动作或玩家输入。
+ * 出参：JSX.Element，包含位置、出口、公共快捷操作、NPC 区、地点区和状态提示。
+ * 异常：不抛异常；缺失场景字段时以空列表和占位文案降级展示。
+ */
 function ScenePanel({
   scene,
   turnData,
@@ -952,8 +998,10 @@ function ScenePanel({
   onSubmit: (value: string) => Promise<void>;
 }) {
   const location = scene?.current_location ?? {};
-  const sceneObjects = (scene?.scene_objects ?? []).filter(
-    (item) => item.object_type !== "item"
+  const sceneObjects = scene?.scene_objects ?? [];
+  const npcObjects = sceneObjects.filter((item) => item.object_type === "npc");
+  const placeObjects = sceneObjects.filter((item) =>
+    ["location", "exit", "system"].includes(item.object_type)
   );
   const exits = scene?.exits ?? [];
   const visibleTargets = (scene?.visible_npcs ?? []).map((item) =>
@@ -1023,23 +1071,25 @@ function ScenePanel({
               </div>
             </div>
           ) : null}
-          <div className="grid gap-2 sm:grid-cols-2">
-            {sceneObjects.length ? (
-              sceneObjects.slice(0, 4).map((item) => (
-                <SceneObjectCard
-                  key={item.object_id}
-                  item={item}
-                  quickActions={sceneQuickActionLayout.objectActions[item.object_id] ?? []}
-                  isBusy={isBusy}
-                  onSubmit={onSubmit}
-                />
-              ))
-            ) : (
-              <>
-                <Skeleton className="h-12" />
-                <Skeleton className="h-12" />
-              </>
-            )}
+          <div className="grid gap-3 xl:grid-cols-2">
+            <SceneObjectSection
+              title="NPC"
+              emptyText="当前没有可见 NPC"
+              icon={UserRoundIcon}
+              items={npcObjects}
+              sceneQuickActionLayout={sceneQuickActionLayout}
+              isBusy={isBusy}
+              onSubmit={onSubmit}
+            />
+            <SceneObjectSection
+              title="地点"
+              emptyText="当前没有地点对象"
+              icon={MapIcon}
+              items={placeObjects}
+              sceneQuickActionLayout={sceneQuickActionLayout}
+              isBusy={isBusy}
+              onSubmit={onSubmit}
+            />
           </div>
         </div>
         <Alert>
@@ -1049,6 +1099,61 @@ function ScenePanel({
         </Alert>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 功能：按对象类型渲染一个场景交互分区，避免 NPC 与地点在同一视觉列表内混杂。
+ * 入参：title（string）：分区标题；emptyText（string）：空态文案；icon（LucideIcon）：标题图标；
+ *   items（SceneObjectRef[]）：本分区对象；sceneQuickActionLayout（SceneQuickActionLayout）：动作布局；
+ *   isBusy（boolean）：回合请求状态；onSubmit（函数）：快捷动作提交回调。
+ * 出参：JSX.Element，包含分区标题、数量、对象卡片或空态。
+ * 异常：不抛异常；对象数量为 0 时展示空态，不影响其他分区渲染。
+ */
+function SceneObjectSection({
+  title,
+  emptyText,
+  icon: Icon,
+  items,
+  sceneQuickActionLayout,
+  isBusy,
+  onSubmit,
+}: {
+  title: string;
+  emptyText: string;
+  icon: LucideIcon;
+  items: SceneObjectRef[];
+  sceneQuickActionLayout: SceneQuickActionLayout;
+  isBusy: boolean;
+  onSubmit: (value: string) => Promise<void>;
+}) {
+  return (
+    <section className="min-h-[180px] rounded-lg border border-primary/20 bg-background/35 p-3">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <Icon data-icon="inline-start" />
+          {title}
+        </h3>
+        <Badge variant="secondary">{items.length}</Badge>
+      </div>
+      {items.length ? (
+        <div className="grid gap-2">
+          {items.slice(0, 4).map((item) => (
+            <SceneObjectCard
+              key={item.object_id}
+              item={item}
+              quickActions={sceneQuickActionLayout.objectActions[item.object_id] ?? []}
+              isBusy={isBusy}
+              onSubmit={onSubmit}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="flex min-h-24 items-center rounded-md border border-dashed border-primary/20 px-3 text-sm text-muted-foreground">
+          {emptyText}
+        </div>
+      )}
+    </section>
   );
 }
 

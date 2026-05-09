@@ -4,6 +4,8 @@ import type { SessionPayload } from "@/types";
 export type CreateSessionInput = {
   character_id?: string;
   sandbox_mode?: boolean;
+  pack_id?: string;
+  scenario_id?: string;
 };
 
 /**

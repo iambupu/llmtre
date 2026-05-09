@@ -62,7 +62,8 @@ def test_load_main_loop_rules_deep_merges_nested_overrides(tmp_path: Path) -> No
     assert rules["outer_loop"]["max_pending_tasks"] == 3
     assert rules["outer_loop"]["emit_world_evolution"] is True
     assert rules["nlu"]["target_aliases"]["dragon_01"] == ["龙"]
-    assert rules["nlu"]["target_aliases"]["goblin_01"] == ["地精", "goblin"]
+    assert rules["nlu"]["target_aliases"]["player_01"] == ["旅行者", "player"]
+    assert rules["default_story_policy"]["background"] == "unfixed"
 
 
 def test_deep_merge_replaces_non_dict_values() -> None:

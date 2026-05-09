@@ -1,0 +1,28 @@
+{
+  "scene_id": "ruins_gate",
+  "display_name": "遗迹石门",
+  "summary": "半塌的石门刻着三枚月相符号，门缝后传来缓慢的滴水声。",
+  "exits": [
+    {
+      "target_scene_id": "forest_edge",
+      "label": "返回雾林边缘",
+      "aliases": ["西", "返回", "林口"]
+    },
+    {
+      "target_scene_id": "old_camp",
+      "label": "回到废弃营地",
+      "aliases": ["营地", "石阶"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_moon_seal",
+      "label": "检查月相符号",
+      "kind": "inspect",
+      "target_ref": "moon_seal",
+      "aliases": ["月相", "符号", "石门"]
+    }
+  ],
+  "visible_npcs": [],
+  "visible_items": ["moon_seal"]
+}
