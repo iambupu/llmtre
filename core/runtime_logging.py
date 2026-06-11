@@ -1,3 +1,7 @@
+"""
+功能：配置主循环、事件总线与外环工作流的运行日志。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -42,9 +46,7 @@ def ensure_runtime_logging() -> None:
     _INITIALIZED = True
 
 
-def _attach_file_handler(
-    logger_name: str, log_path: Path, formatter: logging.Formatter
-) -> None:
+def _attach_file_handler(logger_name: str, log_path: Path, formatter: logging.Formatter) -> None:
     """
     功能：执行 `_attach_file_handler` 相关业务逻辑。
     入参：logger_name；log_path；formatter。

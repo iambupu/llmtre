@@ -1,3 +1,7 @@
+"""
+功能：重放外环 outbox 事件以验证异步投递行为。
+"""
+
 from __future__ import annotations
 
 import argparse

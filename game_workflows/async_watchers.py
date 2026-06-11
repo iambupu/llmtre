@@ -1,3 +1,7 @@
+"""
+功能：实现主循环外环事件的异步监听和投递桥接。
+"""
+
 import logging
 from collections import defaultdict
 from typing import Any, cast
@@ -17,6 +21,7 @@ from tools.sqlite_db.db_updater import DBUpdater
 
 ensure_runtime_logging()
 logger = logging.getLogger("Workflow.AsyncWatchers")
+
 
 class GlobalEventWorkflow(Workflow):
     """
@@ -136,51 +141,32 @@ class GlobalEventWorkflow(Workflow):
         rewards = self._achievement_rewards()
         reward_raw = rewards.get(ev.achievement_id, {})
         reward = cast(dict[str, object], reward_raw if isinstance(reward_raw, dict) else {})
-        recorded = self.db_updater.record_achievement_unlock(
+        unlock_result = self.db_updater.record_achievement_unlock_with_reward(
             entity_id=ev.entity_id,
             achievement_id=ev.achievement_id,
             description=ev.description,
             reward=reward,
         )
-        if not recorded:
+        unlock_status = str(unlock_result.get("status") or "")
+        if unlock_status == "already_unlocked":
             logger.info(
                 "外环成就已存在（跳过重复写入）: achievement=%s entity=%s",
                 ev.achievement_id,
                 ev.entity_id,
             )
             return StopEvent(result=f"Achievement {ev.achievement_id} already unlocked.")
-
-        if reward:
-            try:
-                self.db_updater.apply_diff(ev.entity_id, reward, use_shadow=False)
-            except Exception as error:  # noqa: BLE001
-                if "no such table" in str(error):
-                    # 降级路径：外环可在仅有运行期表的最小库中执行，奖励写入缺实体表时跳过即可。
-                    logger.info(
-                        "外环成就奖励跳过: achievement=%s entity=%s reason=%s",
-                        ev.achievement_id,
-                        ev.entity_id,
-                        error,
-                    )
-                    logger.info(
-                        "外环成就解锁: achievement=%s entity=%s desc=%s reward=%s",
-                        ev.achievement_id,
-                        ev.entity_id,
-                        ev.description,
-                        reward,
-                    )
-                    return StopEvent(
-                        result=(
-                            f"Achievement {ev.achievement_id} unlocked "
-                            f"for {ev.entity_id}."
-                        )
-                    )
-                logger.warning(
-                    "外环成就奖励写入失败（已忽略）: achievement=%s entity=%s err=%s",
-                    ev.achievement_id,
-                    ev.entity_id,
-                    error,
-                )
+        if unlock_status != "unlocked":
+            self._unmark_achievement_once(ev.entity_id, ev.achievement_id)
+            logger.warning(
+                "外环成就奖励写入失败（未解锁）: achievement=%s entity=%s status=%s reason=%s",
+                ev.achievement_id,
+                ev.entity_id,
+                unlock_status,
+                unlock_result.get("reason", ""),
+            )
+            return StopEvent(
+                result=f"Achievement {ev.achievement_id} reward failed for {ev.entity_id}."
+            )
         logger.info(
             "外环成就解锁: achievement=%s entity=%s desc=%s reward=%s",
             ev.achievement_id,
@@ -229,6 +215,20 @@ class GlobalEventWorkflow(Workflow):
         unlocked.add(achievement_id)
         return True
 
+    def _unmark_achievement_once(self, entity_id: str, achievement_id: str) -> None:
+        """
+        功能：撤销本轮内存去重标记，供奖励/记录事务失败时后续重试。
+        入参：entity_id（str）：实体 ID；achievement_id（str）：成就 ID。
+        出参：None。
+        异常：不抛异常；不存在的内存标记按无事发生处理。
+        """
+        unlocked = self._unlocked_achievements.get(entity_id)
+        if unlocked is None:
+            return
+        unlocked.discard(achievement_id)
+        if not unlocked:
+            self._unlocked_achievements.pop(entity_id, None)
+
     def _achievement_rewards(self) -> dict[str, dict[str, int]]:
         """
         功能：执行 `_achievement_rewards` 相关业务逻辑。
@@ -249,6 +249,7 @@ class GlobalEventWorkflow(Workflow):
                 if key in {"hp_delta", "mp_delta"} and isinstance(value, int)
             }
         return rewards
+
 
 class OuterLoopBridge:
     """外环桥接接口：内环通过它向外环投递最小事件。"""

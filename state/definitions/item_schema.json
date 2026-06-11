@@ -60,7 +60,7 @@
   "description": "物品数据核心契约 (Item Data Contract)\n\n定义了一个物品必须具备哪些属性才能被数值引擎识别。\nMod 开发者提供的 JSON 必须完全符合此结构。",
   "properties": {
     "item_id": {
-      "description": "全局唯一标识符，如 'iron_sword_01'",
+      "description": "全局唯一标识符，如 'item_01'",
       "title": "Item Id",
       "type": "string"
     },

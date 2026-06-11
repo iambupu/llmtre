@@ -1,3 +1,7 @@
+"""
+功能：将规则书文档导入 RAG 分组并按需触发索引同步。
+"""
+
 import argparse
 import json
 import logging
@@ -12,11 +16,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from tools.rag import RAGManager
 
 logger = logging.getLogger("DocImporter")
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RULES_PATH = os.path.join(BASE_DIR, "config", "rag_import_rules.json")
 DOCS_DIR = os.path.join(BASE_DIR, "docs")
+
 
 class DocImporter:
     """文档导入助手：简化 RAG 规则配置与同步流程"""
@@ -102,7 +107,7 @@ class DocImporter:
                 "group_name": group_name,
                 "description": description or f"由导入助手自动创建的分组: {group_name}",
                 "tags": tags or ["auto-imported"],
-                "file_paths": []
+                "file_paths": [],
             }
             self.rules["groups"].append(target_group)
 
@@ -130,6 +135,7 @@ class DocImporter:
             logger.info("RAG 向量库同步完成。")
         except Exception as e:
             logger.error(f"同步过程中出错: {e}")
+
 
 def _parse_tags(raw_tags: str) -> list[str]:
     """
@@ -186,7 +192,7 @@ def main() -> None:
         logger.info(f"正在扫描普通目录: {args.path}")
         for root, _, files in os.walk(args.path):
             for file in files:
-                if file.endswith(('.md', '.txt', '.pdf', '.docx', '.json')):
+                if file.endswith((".md", ".txt", ".pdf", ".docx", ".json")):
                     full_p = os.path.join(root, file)
                     importer.add_to_group(
                         full_p,
@@ -205,6 +211,7 @@ def main() -> None:
 
     if args.sync:
         importer.sync()
+
 
 if __name__ == "__main__":
     main()

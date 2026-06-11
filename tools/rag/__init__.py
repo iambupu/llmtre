@@ -37,8 +37,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("RAGManager")
 
+
 class RAGManager:
     """RAG 系统统一入口类"""
+
     def __init__(self, probe_on_init: bool = False):
         """
         功能：初始化对象状态与依赖。
@@ -182,6 +184,7 @@ class RAGManager:
         except Exception as error:  # noqa: BLE001
             logger.exception("RAG 只读查询失败，已降级返回错误文案: query=%s", query)
             return f"检索失败：{error}"
+
 
 if __name__ == "__main__":
     manager = RAGManager(probe_on_init=True)

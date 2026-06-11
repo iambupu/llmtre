@@ -1,3 +1,7 @@
+"""
+功能：统一封装 RAG 检索、融合和只读查询入口。
+"""
+
 import logging
 import os
 from typing import Any
@@ -30,6 +34,7 @@ GRAPH_INDEX_DIR = os.path.join(INDEX_DIR, "graph")
 
 logger = logging.getLogger("RAGManager.Retriever")
 
+
 class HybridRetriever(BaseRetriever):
     """自定义混合检索器：整合 Vector, BM25, Graph"""
 
@@ -37,7 +42,7 @@ class HybridRetriever(BaseRetriever):
         self,
         vector_retriever: BaseRetriever,
         bm25_retriever: BaseRetriever,
-        graph_retriever: BaseRetriever | None = None
+        graph_retriever: BaseRetriever | None = None,
     ):
         """
         功能：初始化对象状态与依赖。
@@ -156,21 +161,19 @@ class UnifiedRetriever:
         # 3. 构建路由引擎
         rag_tool = QueryEngineTool.from_defaults(
             query_engine=rag_engine,
-            description="用于查询游戏规则、物理法则、世界观设定、人物背景和历史传说。"
+            description="用于查询游戏规则、物理法则、世界观设定、人物背景和历史传说。",
         )
 
         tools = [rag_tool]
         if sql_engine:
             sql_tool = QueryEngineTool.from_defaults(
                 query_engine=sql_engine,
-                description="用于查询玩家或NPC的实时数值状态（血量HP、法力MP、属性）、背包物品库存、全局开关状态以及最近发生的历史事件日志。"
+                description="用于查询玩家或NPC的实时数值状态（血量HP、法力MP、属性）、背包物品库存、全局开关状态以及最近发生的历史事件日志。",
             )
             tools.append(sql_tool)
 
         router_engine = RouterQueryEngine(
-            selector=LLMSingleSelector.from_defaults(),
-            query_engine_tools=tools,
-            verbose=True
+            selector=LLMSingleSelector.from_defaults(), query_engine_tools=tools, verbose=True
         )
 
         # 4. 执行路由查询

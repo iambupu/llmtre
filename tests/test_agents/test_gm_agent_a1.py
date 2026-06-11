@@ -1,3 +1,7 @@
+"""
+功能：覆盖 gm agent a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -15,19 +19,49 @@ class _Response:
     """
 
     def __init__(self, body: bytes = b"", lines: list[bytes] | None = None) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self._body = body
         self._lines = lines or []
 
     def __enter__(self) -> _Response:
+        """
+        功能：实现测试替身的 __enter__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:  # noqa: ANN001
+        """
+        功能：实现测试替身的 __exit__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return False
 
     def __iter__(self):
+        """
+        功能：实现测试替身的 __iter__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return iter(self._lines)
 
     def read(self) -> bytes:
+        """
+        功能：提供 read 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return self._body
 
 
@@ -40,6 +74,12 @@ class _UnreadableHTTPError(urllib.error.HTTPError):
     """
 
     def read(self, amt: int | None = None) -> bytes:  # noqa: ARG002
+        """
+        功能：提供 read 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("body unavailable")
 
 
@@ -133,6 +173,48 @@ def test_gm_llm_prompt_includes_character_status_context() -> None:
     assert "受伤、刚刚移动" in prompt
     assert "state_flags_add" in prompt
     assert "生命值低于安全线" in prompt
+
+
+def test_gm_effect_sentence_localizes_state_flags() -> None:
+    """
+    功能：验证 GM 面向玩家的状态标记句会本地化稳定 flag 和 Story Pack 动态 flag。
+    入参：无，使用内联 physics_diff。
+    出参：None。
+    异常：断言失败表示旁白又泄漏内部状态 key 或英文后缀。
+    """
+    agent = GMAgent(
+        event_bus=None,
+        rules={
+            "narrative_templates": {},
+            "character_status": {
+                "flags": {
+                    "moved_recently": {
+                        "label": "刚刚移动",
+                        "kind": "activity",
+                        "severity": "info",
+                    }
+                }
+            },
+        },
+    )
+
+    text = agent._effect_sentence(  # noqa: SLF001
+        {
+            "state_flags_add": [
+                "moved_recently",
+                "静默潮钟_unsealed",
+                "潮誓碎片_recovered",
+                "internal_unknown_flag",
+            ]
+        }
+    )
+
+    assert "刚刚移动" in text
+    assert "静默潮钟已解封" in text
+    assert "已找回潮誓碎片" in text
+    assert "internal_unknown_flag" not in text
+    assert "_unsealed" not in text
+    assert "_recovered" not in text
 
 
 def test_gm_quick_actions_prioritize_affordances() -> None:
@@ -240,9 +322,19 @@ def test_gm_suggest_quick_actions_llm_failure_has_warning_log(
     """
     agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
     agent.llm_enabled = True
-    agent.llm_config = {"provider": "ollama", "model": "test-model", "base_url": "http://localhost:11434"}
+    agent.llm_config = {
+        "provider": "ollama",
+        "model": "test-model",
+        "base_url": "http://localhost:11434",
+    }
 
     def _raise_url_error(*args, **kwargs):
+        """
+        功能：提供 raise url error 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("llm unavailable")
 
     monkeypatch.setattr("urllib.request.urlopen", _raise_url_error)
@@ -303,6 +395,12 @@ def test_gm_render_with_llm_http_error_body_read_failure_still_logs_fallback(
     agent.llm_config = {"provider": "ollama", "model": "missing-model", "base_url": "http://ollama"}
 
     def _raise_http_error(*args, **kwargs):  # noqa: ANN002, ANN003
+        """
+        功能：提供 raise http error 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise _UnreadableHTTPError("http://ollama/api/generate", 500, "boom", {}, None)
 
     monkeypatch.setattr("urllib.request.urlopen", _raise_http_error)
@@ -457,6 +555,12 @@ def test_gm_stream_callback_failure_is_logged_and_stream_continues(
     caplog.set_level(logging.WARNING, logger="Agent.GM")
 
     def _broken_callback(_chunk: str) -> None:
+        """
+        功能：提供 broken callback 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("client disconnected")
 
     text = agent.render(
@@ -576,7 +680,7 @@ def test_gm_template_renders_action_branches_with_numeric_fallbacks() -> None:
     assert "与 npc_01 进行交谈" in agent.render(
         base | {"action_intent": {"type": "talk", "target_id": "npc_01"}, "physics_diff": {}}
     )
-    assert "前往了 gate" in agent.render(
+    assert "前往gate" in agent.render(
         base
         | {
             "action_intent": {"type": "move", "parameters": {"location_id": "gate"}},
@@ -601,3 +705,63 @@ def test_gm_template_renders_action_branches_with_numeric_fallbacks() -> None:
         }
     )
     assert "完成了 custom 行动" in agent.render(base | {"action_intent": {"type": "custom"}})
+
+
+def test_gm_move_template_uses_exit_action_text_without_duplicate_prefix() -> None:
+    """
+    功能：验证 GM 移动旁白复用出口动作文本，避免“前往了 走向/从后门回”这类重复动词。
+    入参：无，构造含多个出口标签的最小场景状态。
+    出参：None。
+    异常：断言失败表示移动叙事再次暴露代码式或重复动作文本。
+    """
+    agent = GMAgent(event_bus=None, rules={"narrative_templates": {}})
+    agent.llm_enabled = False
+    base = {
+        "is_valid": True,
+        "active_character": {"name": "玩家"},
+        "physics_diff": {},
+        "scene_snapshot": {
+            "exits": [
+                {
+                    "target_scene_id": "red_lantern_lane",
+                    "label": "从后门回赤灯巷",
+                },
+                {
+                    "target_scene_id": "bell_courtyard",
+                    "label": "走向静默钟院",
+                },
+                {
+                    "target_scene_id": "tide_cellar",
+                    "label": "沿钟后石阶进入潮下水窖",
+                },
+            ]
+        },
+    }
+
+    assert agent.render(
+        base
+        | {
+            "action_intent": {
+                "type": "move",
+                "parameters": {"location_id": "red_lantern_lane"},
+            },
+        }
+    ).startswith("玩家从后门回赤灯巷。")
+    assert "前往了 走向" not in agent.render(
+        base
+        | {
+            "action_intent": {
+                "type": "move",
+                "parameters": {"location_id": "bell_courtyard"},
+            },
+        }
+    )
+    assert agent.render(
+        base
+        | {
+            "action_intent": {
+                "type": "move",
+                "parameters": {"location_id": "tide_cellar"},
+            },
+        }
+    ).startswith("玩家沿钟后石阶进入潮下水窖。")

@@ -15,7 +15,7 @@
     "name": "continue_on_road",
     "input": "在路上移动",
     "expected_type": "move",
-    "expected_location_id": "forest_edge",
+    "expected_location_id": "next_area",
     "expected_clarification": false
   },
   {
@@ -55,14 +55,14 @@
     "expected_clarification": false
   },
   {
-    "name": "ask_guard_topic_as_talk",
-    "input": "问守卫森林怎么走",
+    "name": "ask_contact_topic_as_talk",
+    "input": "问场景联系人下一步怎么走",
     "expected_type": "talk",
     "expected_clarification": false
   },
   {
     "name": "approach_and_attack_prioritizes_attack",
-    "input": "靠近地精并攻击",
+    "input": "靠近目标并攻击",
     "expected_type": "attack",
     "expected_clarification": false
   }

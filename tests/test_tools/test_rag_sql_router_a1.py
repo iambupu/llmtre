@@ -1,3 +1,7 @@
+"""
+功能：覆盖 rag sql router a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -18,6 +22,12 @@ class _FakeNLSQLTableQueryEngine:
     """
 
     def __init__(self, **kwargs: Any) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.kwargs = kwargs
 
 

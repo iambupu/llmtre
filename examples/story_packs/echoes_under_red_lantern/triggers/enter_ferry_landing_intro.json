@@ -1,0 +1,18 @@
+{
+  "trigger_id": "enter_ferry_landing_intro",
+  "type": "enter_scene",
+  "label": "赤灯提前亮起",
+  "description": "玩家首次抵达鹭潮渡口，主线调查开始。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "ferry_landing",
+    "quest_id": "recover_the_tide_oath",
+    "quest_status": "active",
+    "target_stage_id": "read_the_notice",
+    "flag": "red_lantern_case_started",
+    "narrative_text": "赤灯在大雾中提前亮起。船夫任伯没有上船，只把目光压在潮汐告示上。",
+    "memory_text": "你抵达鹭潮渡口，赤灯异常提前亮起，调查从潮汐告示和船夫任伯开始。"
+  },
+  "once": true,
+  "priority": 100
+}

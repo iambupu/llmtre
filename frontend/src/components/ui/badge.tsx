@@ -27,6 +27,12 @@ const badgeVariants = cva(
   }
 )
 
+/**
+ * 功能：渲染项目统一样式的徽标文本。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function Badge({
   className,
   variant = "default",
@@ -46,4 +52,4 @@ function Badge({
   )
 }
 
-export { Badge, badgeVariants }
+export { Badge }

@@ -1,3 +1,7 @@
+"""
+功能：定义物品、装备和消耗品相关的状态模型。
+"""
+
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -6,15 +10,25 @@ from .base import Requirement
 
 
 class ItemType(StrEnum):
+    """
+    功能：定义物品分类枚举。
+    入参：无；枚举成员在类定义中声明。
+    出参：ItemType 枚举值，用于区分消耗品、装备、任务物品和杂项。
+    异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。
+    """
+
     WEAPON = "weapon"
     ARMOR = "armor"
     CONSUMABLE = "consumable"
     QUEST = "quest"
 
+
 class ItemEffect(BaseModel):
     """物品的数值影响契约"""
+
     target_attribute: str = Field(..., description="影响的属性，如 'hp', 'strength'")
     value: int = Field(..., description="变化值，正数为增加，负数为减少")
+
 
 class ItemTemplate(BaseModel):
     """物品数据核心契约 (Item Data Contract)
@@ -22,7 +36,8 @@ class ItemTemplate(BaseModel):
     定义了一个物品必须具备哪些属性才能被数值引擎识别。
     Mod 开发者提供的 JSON 必须完全符合此结构。
     """
-    item_id: str = Field(..., description="全局唯一标识符，如 'iron_sword_01'")
+
+    item_id: str = Field(..., description="全局唯一标识符，如 'item_01'")
     name: str = Field(..., description="物品展示名称")
     description: str = Field(..., description="物品的叙事背景描述（供 RAG 和 LLM 使用）")
     item_type: ItemType = Field(..., description="物品大类分类")
@@ -39,10 +54,9 @@ class ItemTemplate(BaseModel):
     # 逻辑钩子 (Hooks)
     hooks: dict[str, str] = Field(
         default_factory=dict,
-        description="事件钩子，如 {'on_use': 'heal_logic', 'on_equip': 'add_aura'}"
+        description="事件钩子，如 {'on_use': 'heal_logic', 'on_equip': 'add_aura'}",
     )
 
     # 限制
     usage_limit: int = Field(default=-1, description="使用次数限制，-1 表示无限次")
     is_stackable: bool = Field(default=False, description="在背包中是否可堆叠")
-

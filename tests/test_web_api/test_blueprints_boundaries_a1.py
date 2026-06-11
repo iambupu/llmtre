@@ -1,3 +1,7 @@
+"""
+功能：覆盖 blueprints boundaries a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import threading
@@ -33,6 +37,12 @@ class _MemoryStore:
     """
 
     def __init__(self, turns: list[dict[str, Any]]) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.turns = turns
         self.saved_payload: dict[str, Any] | None = None
         self.memory_policy: dict[str, Any] | None = None
@@ -113,6 +123,12 @@ class _RuntimeStore:
     """
 
     def __init__(self, clear_ok: bool) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.clear_ok = clear_ok
         self.saved_payload: dict[str, Any] | None = None
 
@@ -135,13 +151,15 @@ class _RuntimeStore:
         session_id: str,
         keep_character: bool,
         now_iso: str,
+        initial_location_id: str | None = None,
     ) -> bool:
         """
         功能：返回预置清理结果。
-        入参：session_id；keep_character；now_iso。
+        入参：session_id；keep_character；now_iso；initial_location_id。
         出参：bool。
         异常：无。
         """
+        del initial_location_id
         return self.clear_ok
 
     def save_idempotent_response(

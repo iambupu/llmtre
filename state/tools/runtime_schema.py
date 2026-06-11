@@ -1,3 +1,7 @@
+"""
+功能：导出运行时契约模型的 JSON Schema 生成辅助逻辑。
+"""
+
 import sqlite3
 
 
@@ -19,38 +23,31 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
     出参：None。
     异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
     """
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS world_state_active (
             key TEXT PRIMARY KEY,
             value_json TEXT,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS world_state_shadow (
             key TEXT PRIMARY KEY,
             value_json TEXT,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS timeline (
             id INTEGER PRIMARY KEY CHECK (id = 0),
             current_time_minutes INTEGER DEFAULT 0,
             total_turns INTEGER DEFAULT 0
         )
-        """
-    )
+        """)
     cursor.execute(
         "INSERT OR IGNORE INTO timeline (id, current_time_minutes, total_turns) VALUES (0, 0, 0)"
     )
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS achievement_unlocks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             entity_id TEXT NOT NULL,
@@ -60,10 +57,8 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
             unlocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(entity_id, achievement_id)
         )
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS outer_event_outbox (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_name TEXT NOT NULL,
@@ -76,24 +71,18 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+        """)
     if not _table_has_column(cursor, "outer_event_outbox", "next_retry_at"):
-        cursor.execute(
-            """
+        cursor.execute("""
             ALTER TABLE outer_event_outbox
             ADD COLUMN next_retry_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            """
-        )
+            """)
     if not _table_has_column(cursor, "outer_event_outbox", "dead_lettered_at"):
-        cursor.execute(
-            """
+        cursor.execute("""
             ALTER TABLE outer_event_outbox
             ADD COLUMN dead_lettered_at DATETIME
-            """
-        )
-    cursor.execute(
-        """
+            """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS web_sessions (
             session_id TEXT PRIMARY KEY,
             character_id TEXT NOT NULL,
@@ -106,12 +95,12 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
             pack_version TEXT,
             compiled_artifact_hash TEXT,
             persona_profile_json TEXT NOT NULL DEFAULT '{}',
+            session_metadata_json TEXT NOT NULL DEFAULT '{}',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+        """)
     # A2-Core 迁移边界：旧会话允许 pack 字段为空，表示继续使用 engine default 内容层。
     for column_name, column_sql in (
         ("pack_id", "pack_id TEXT"),
@@ -119,11 +108,23 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
         ("pack_version", "pack_version TEXT"),
         ("compiled_artifact_hash", "compiled_artifact_hash TEXT"),
         ("persona_profile_json", "persona_profile_json TEXT NOT NULL DEFAULT '{}'"),
+        ("session_metadata_json", "session_metadata_json TEXT NOT NULL DEFAULT '{}'"),
+        ("base_character_id", "base_character_id TEXT"),
+        ("runtime_character_id", "runtime_character_id TEXT"),
     ):
         if not _table_has_column(cursor, "web_sessions", column_name):
             cursor.execute(f"ALTER TABLE web_sessions ADD COLUMN {column_sql}")
-    cursor.execute(
-        """
+    cursor.execute("""
+        UPDATE web_sessions
+        SET base_character_id = character_id
+        WHERE base_character_id IS NULL OR base_character_id = ''
+        """)
+    cursor.execute("""
+        UPDATE web_sessions
+        SET runtime_character_id = character_id
+        WHERE runtime_character_id IS NULL OR runtime_character_id = ''
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS web_session_turns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
@@ -133,23 +134,27 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
             is_valid INTEGER NOT NULL DEFAULT 0,
             action_intent_json TEXT,
             physics_diff_json TEXT,
+            trigger_events_json TEXT,
+            quest_updates_json TEXT,
             final_response TEXT NOT NULL,
             memory_summary TEXT NOT NULL DEFAULT '',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(session_id, turn_id)
         )
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    for column_name, column_sql in (
+        ("trigger_events_json", "trigger_events_json TEXT"),
+        ("quest_updates_json", "quest_updates_json TEXT"),
+    ):
+        if not _table_has_column(cursor, "web_session_turns", column_name):
+            cursor.execute(f"ALTER TABLE web_session_turns ADD COLUMN {column_sql}")
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_web_turns_session_id
         ON web_session_turns(session_id)
-        """
-    )
+        """)
     # 迁移边界：历史版本未对 (session_id, request_id) 加唯一约束。
     # 这里先去重保留最早写入的一条，再创建唯一索引兜底幂等语义。
-    cursor.execute(
-        """
+    cursor.execute("""
         DELETE FROM web_session_turns
         WHERE id IN (
             SELECT newer.id
@@ -159,17 +164,43 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
              AND newer.request_id = older.request_id
              AND newer.id > older.id
         )
-        """
-    )
+        """)
     cursor.execute("DROP INDEX IF EXISTS idx_web_turns_session_req")
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_web_turns_session_req_unique
         ON web_session_turns(session_id, request_id)
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS web_session_memory_items (
+            memory_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'session',
+            kind TEXT NOT NULL,
+            subject_type TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            evidence_turn_id INTEGER NOT NULL,
+            importance INTEGER NOT NULL DEFAULT 3,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_turn_id INTEGER NOT NULL,
+            last_seen_turn_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(session_id, kind, subject_type, subject_id, text)
+        )
+        """)
+    # 长期记忆检索路径：按会话读取 active 条目，再按对象/类型裁剪给 GM。
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_web_memory_session_status
+        ON web_session_memory_items(session_id, status, importance DESC, last_seen_turn_id DESC)
+        """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_web_memory_subject
+        ON web_session_memory_items(session_id, subject_type, subject_id, status)
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS web_idempotency_keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scope TEXT NOT NULL,
@@ -179,27 +210,20 @@ def ensure_runtime_tables(cursor: sqlite3.Cursor) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(scope, session_id, request_id)
         )
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS web_sandbox_lock (
             lock_id INTEGER PRIMARY KEY CHECK (lock_id = 1),
             owner_session_id TEXT,
             acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
         INSERT OR IGNORE INTO web_sandbox_lock(lock_id, owner_session_id)
         VALUES (1, NULL)
-        """
-    )
-    cursor.execute(
-        """
+        """)
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_web_idempotency_scope_session
         ON web_idempotency_keys(scope, session_id)
-        """
-    )
+        """)

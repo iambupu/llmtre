@@ -4,6 +4,12 @@ import { Tabs as TabsPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 功能：封装 Tabs 根节点并同步方向数据属性。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function Tabs({
   className,
   orientation = "horizontal",
@@ -37,6 +43,12 @@ const tabsListVariants = cva(
   }
 )
 
+/**
+ * 功能：渲染 Tabs 触发器容器并应用列表样式变体。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function TabsList({
   className,
   variant = "default",
@@ -53,6 +65,12 @@ function TabsList({
   )
 }
 
+/**
+ * 功能：渲染单个 Tabs 切换按钮。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function TabsTrigger({
   className,
   ...props
@@ -72,6 +90,12 @@ function TabsTrigger({
   )
 }
 
+/**
+ * 功能：渲染当前 Tabs 面板内容容器。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function TabsContent({
   className,
   ...props
@@ -85,4 +109,4 @@ function TabsContent({
   )
 }
 
-export { Tabs, TabsList, TabsTrigger, TabsContent, tabsListVariants }
+export { Tabs, TabsList, TabsTrigger, TabsContent }

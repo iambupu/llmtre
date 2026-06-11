@@ -5,7 +5,7 @@ import { type VariantProps } from "class-variance-authority"
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
-import { toggleVariants } from "@/components/ui/toggle"
+import { toggleVariants } from "@/components/ui/toggle-variants"
 
 const ToggleGroupContext = React.createContext<
   VariantProps<typeof toggleVariants> & {
@@ -19,6 +19,12 @@ const ToggleGroupContext = React.createContext<
   orientation: "horizontal",
 })
 
+/**
+ * 功能：封装 Radix ToggleGroup 根节点并统一组样式。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function ToggleGroup({
   className,
   variant,
@@ -55,6 +61,12 @@ function ToggleGroup({
   )
 }
 
+/**
+ * 功能：封装 ToggleGroup 单个选项并继承组内尺寸约定。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function ToggleGroupItem({
   className,
   children,

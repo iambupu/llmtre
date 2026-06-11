@@ -1,7 +1,7 @@
 import { createRequestId, requestJson } from "@/api/client";
 import { parseSseChunk } from "@/lib/sse";
 import { useDebugStore } from "@/stores/debugStore";
-import type { StreamEventPayload, TurnResult } from "@/types";
+import type { StreamEventPayload, TurnListPayload, TurnResult } from "@/types";
 
 export type TurnInput = {
   user_input: string;
@@ -12,6 +12,50 @@ export type TurnInput = {
 export type StreamHandlers = {
   onEvent?: (event: string, payload: StreamEventPayload) => void;
 };
+
+/**
+ * 功能：分页读取指定会话的后端持久化回合历史。
+ * 入参：sessionId（string）：会话 ID；page（number，默认 1）：页码；pageSize（number，默认 100）：每页条数。
+ * 出参：Promise<TurnListPayload>，包含总数和当前页回合摘要。
+ * 异常：接口失败时由 requestJson 抛出 ApiError；调用方负责回滚加载态或提示错误。
+ */
+export async function listSessionTurns(
+  sessionId: string,
+  page = 1,
+  pageSize = 100
+): Promise<TurnListPayload> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  return requestJson<TurnListPayload>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/turns?${params.toString()}`
+  );
+}
+
+/**
+ * 功能：按页拉取一个会话的完整回合历史，供加载存档时恢复对话记录。
+ * 入参：sessionId（string）：会话 ID；pageSize（number，默认 100）：后端允许的最大分页大小。
+ * 出参：Promise<TurnListPayload>，items 为从旧到新合并后的完整历史。
+ * 异常：任一分页请求失败时抛出 ApiError；不吞掉错误，避免 UI 误以为存档已完整恢复。
+ */
+export async function listAllSessionTurns(
+  sessionId: string,
+  pageSize = 100
+): Promise<TurnListPayload> {
+  const firstPage = await listSessionTurns(sessionId, 1, pageSize);
+  const allItems = [...firstPage.items];
+  const totalPages = Math.ceil(firstPage.total / firstPage.page_size);
+  for (let page = 2; page <= totalPages; page += 1) {
+    const nextPage = await listSessionTurns(sessionId, page, firstPage.page_size);
+    allItems.push(...nextPage.items);
+  }
+  return {
+    ...firstPage,
+    page: 1,
+    items: allItems,
+  };
+}
 
 /**
  * 功能：提交普通回合请求并返回后端权威结果。

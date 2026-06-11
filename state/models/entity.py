@@ -1,3 +1,7 @@
+"""
+功能：定义角色、NPC 和实体属性相关的状态模型。
+"""
+
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -6,15 +10,24 @@ from .base import ResourcePool, Stats
 
 
 class EntityType(StrEnum):
+    """
+    功能：定义实体分类枚举。
+    入参：无；枚举成员在类定义中声明。
+    出参：EntityType 枚举值，用于区分玩家、NPC、怪物和环境实体。
+    异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。
+    """
+
     PLAYER = "player"
     NPC = "npc"
     MONSTER = "monster"
+
 
 class EntityTemplate(BaseModel):
     """实体/NPC 数据核心契约 (Entity Data Contract)
 
     定义了世界中活动对象的基本模板。
     """
+
     entity_id: str = Field(..., description="全局唯一标识符，如 'guard_captain_01'")
     name: str = Field(..., description="实体名称")
     entity_type: EntityType = Field(..., description="实体类型分类")
@@ -48,4 +61,3 @@ class EntityTemplate(BaseModel):
         default_factory=list,
         description="当前状态标记，如 ['invisible', 'poisoned']",
     )
-

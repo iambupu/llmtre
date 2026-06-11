@@ -1,0 +1,21 @@
+{
+  "trigger_id": "inspect_silent_bell",
+  "type": "inspect",
+  "label": "潮钟红线",
+  "description": "静默潮钟上的红线藏着通往水窖的旧石阶位置。",
+  "effects": ["narrative", "grant_item", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "bell_courtyard",
+    "interaction_id": "inspect_silent_bell",
+    "item_id": "bell_clapper_thread",
+    "quantity": 1,
+    "quest_id": "recover_the_tide_oath",
+    "quest_status": "active",
+    "target_stage_id": "recover_oath",
+    "flag": "silent_bell_unsealed",
+    "narrative_text": "红线并不是封印，而是标记。线头垂到钟架后方，那里有一道被碎瓦盖住的旧石阶。",
+    "memory_text": "潮钟红线标出钟后旧石阶，通往潮下水窖。"
+  },
+  "once": true,
+  "priority": 90
+}

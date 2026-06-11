@@ -13,7 +13,7 @@
 - 新增 `web_api/blueprints/sessions.py` 中 `pack_id`/`scenario_id` 的会话创建绑定与 idempotency 预检查。
 - 新增 `state/tools/runtime_schema.py` ALTER TABLE IF NOT EXISTS，为 sessions 表追加 5 个 A2 剧本运行时状态列。
 - 新增 `game_workflows/main_loop_config.py` 中 `default_story_policy` 配置字段。
-- 新增 `story_packs/demo_a2_core/` 演示剧本包（3 个场景、4 个交互入口、1 条 lore）。
+- 新增 `examples/story_packs/demo_a2_core/` 演示剧本包（3 个场景、4 个交互入口、1 条 lore）。
 - 新增 `config/api/openapi.yaml` StoryPacks API 端点规范。
 - 新增 `tests/test_web_api/test_sessions_a2.py` A2 会话绑定回归测试。
 

@@ -1,7 +1,17 @@
+"""
+功能：覆盖 outbox retry 的回归测试。
+"""
+
 from tools.sqlite_db.db_updater import DBUpdater
 
 
 def test_outbox_failed_event_moves_to_dead_letter(tmp_path):
+    """
+    功能：验证 outbox failed event moves to dead letter 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
     updater = DBUpdater(str(db_path))
     event_id = updater.enqueue_outer_event("turn_ended", {"turn_id": 1}, "seed error")
@@ -30,6 +40,12 @@ def test_outbox_failed_event_moves_to_dead_letter(tmp_path):
 
 
 def test_outbox_reserve_only_returns_retryable_events(tmp_path):
+    """
+    功能：验证 outbox reserve only returns retryable events 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
     updater = DBUpdater(str(db_path))
     event_id = updater.enqueue_outer_event(
@@ -47,6 +63,12 @@ def test_outbox_reserve_only_returns_retryable_events(tmp_path):
 
 
 def test_outbox_reclaim_stuck_processing_event(tmp_path):
+    """
+    功能：验证 outbox reclaim stuck processing event 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
     updater = DBUpdater(str(db_path))
     event_id = updater.enqueue_outer_event("turn_ended", {"turn_id": 1}, "seed error")

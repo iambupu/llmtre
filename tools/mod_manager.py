@@ -1,9 +1,16 @@
+"""
+功能：扫描 MOD 目录并维护 MOD 注册表。
+"""
+
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import yaml
+
+from tools.mod_media import normalize_mod_media_manifest
 
 # 配置日志
 logging.basicConfig(
@@ -16,6 +23,7 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MODS_DIR = os.path.join(BASE_DIR, "mods")
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
 REGISTRY_PATH = os.path.join(CONFIG_DIR, "mod_registry.yml")
+
 
 class ModManager:
     """MOD 管理器：负责扫描、注册和配置维护"""
@@ -42,7 +50,7 @@ class ModManager:
 
         # 1. 加载现有注册表
         registry = self._load_registry()
-        existing_mod_ids = {m['mod_id'] for m in registry.get('active_mods', [])}
+        existing_mod_ids = {m["mod_id"] for m in registry.get("active_mods", [])}
 
         new_mods_found = 0
 
@@ -66,28 +74,34 @@ class ModManager:
                     logger.error(f"跳过目录 {foldername}: mod_info.json 中缺少 mod_id")
                     continue
 
+                media_manifest, media_diagnostics = normalize_mod_media_manifest(
+                    mod_info.get("media_manifest", {}),
+                    Path(folder_path),
+                )
+                for diagnostic in media_diagnostics:
+                    logger.warning("MOD %s 媒体声明无效: %s", mod_id, diagnostic)
+
                 # 3. 如果是新发现的 MOD，追加到注册表
                 if mod_id not in existing_mod_ids:
                     logger.info(f"发现新 MOD: {mod_id}")
-                    # 生成默认配置条目：新发现 MOD 默认禁用，避免未审计脚本直接进入运行链路。
-                    new_entry = {
-                        "mod_id": mod_id,
-                        "name": mod_info.get("name", mod_id),
-                        "enabled": False,
-                        "priority": mod_info.get("load_priority", 50),  # 默认优先级 50
-                        "conflict_strategy": "smart_merge",
-                        "allowed_fields": [],  # 为空表示允许所有字段
-                        # 缓存钩子清单以供冲突判定
-                        "hooks_manifest": mod_info.get("hooks_manifest", {}),
-                    }
-                    registry['active_mods'].append(new_entry)
+                    new_entry = self._build_registry_entry(
+                        mod_info,
+                        media_manifest,
+                        media_diagnostics,
+                    )
+                    registry["active_mods"].append(new_entry)
                     existing_mod_ids.add(mod_id)
                     new_mods_found += 1
                 else:
-                    # 即使已存在，也更新其 hooks_manifest，确保同步
-                    for m in registry['active_mods']:
-                        if m['mod_id'] == mod_id:
-                            m['hooks_manifest'] = mod_info.get("hooks_manifest", {})
+                    # 即使已存在，也更新只读 manifest 缓存，确保媒体/钩子声明同步。
+                    for m in registry["active_mods"]:
+                        if m["mod_id"] == mod_id:
+                            self._sync_registry_entry(
+                                m,
+                                mod_info,
+                                media_manifest,
+                                media_diagnostics,
+                            )
                             break
 
             except Exception as e:
@@ -133,6 +147,53 @@ class ModManager:
         with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
             yaml.dump(registry, f, allow_unicode=True, sort_keys=False)
 
+    def _build_registry_entry(
+        self,
+        mod_info: dict[str, Any],
+        media_manifest: dict[str, dict[str, Any]],
+        media_diagnostics: list[str],
+    ) -> dict[str, Any]:
+        """
+        功能：基于 mod_info.json 构造新发现 MOD 的注册表条目。
+        入参：mod_info（dict）：原始 MOD 清单；media_manifest（dict）：已校验媒体清单；
+            media_diagnostics（list[str]）：被跳过的媒体诊断。
+        出参：dict[str, Any]，可写入 active_mods 的条目。
+        异常：不抛异常；缺失字段按默认值降级。
+        """
+        mod_id = str(mod_info.get("mod_id") or "")
+        # 新发现 MOD 默认禁用，避免未审计脚本或媒体自动进入运行链路。
+        entry = {
+            "mod_id": mod_id,
+            "name": mod_info.get("name", mod_id),
+            "enabled": False,
+            "priority": mod_info.get("load_priority", 50),
+            "conflict_strategy": "smart_merge",
+            "allowed_fields": [],
+        }
+        self._sync_registry_entry(entry, mod_info, media_manifest, media_diagnostics)
+        return entry
+
+    def _sync_registry_entry(
+        self,
+        entry: dict[str, Any],
+        mod_info: dict[str, Any],
+        media_manifest: dict[str, dict[str, Any]],
+        media_diagnostics: list[str],
+    ) -> None:
+        """
+        功能：同步现有注册表条目的只读声明缓存。
+        入参：entry（dict）：active_mods 中的目标条目；mod_info（dict）：原始 MOD 清单；
+            media_manifest（dict）：已校验可服务媒体清单；media_diagnostics（list[str]）：媒体诊断。
+        出参：None，原地更新 entry。
+        异常：不抛异常；字段缺失按空声明降级。
+        """
+        entry["hooks_manifest"] = mod_info.get("hooks_manifest", {})
+        entry["media_manifest"] = media_manifest
+        if media_diagnostics:
+            entry["media_diagnostics"] = media_diagnostics
+        else:
+            entry.pop("media_diagnostics", None)
+
     def _get_empty_registry(self) -> dict[str, Any]:
         """
         功能：执行 `_get_empty_registry` 相关业务逻辑。
@@ -140,12 +201,8 @@ class ModManager:
         出参：Dict[str, Any]。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        return {
-            "global_settings": {
-                "default_conflict_strategy": "smart_merge"
-            },
-            "active_mods": []
-        }
+        return {"global_settings": {"default_conflict_strategy": "smart_merge"}, "active_mods": []}
+
 
 def main() -> None:
     """

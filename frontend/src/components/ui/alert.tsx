@@ -19,6 +19,12 @@ const alertVariants = cva(
   }
 )
 
+/**
+ * 功能：渲染提示信息根容器并应用语义变体。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function Alert({
   className,
   variant,
@@ -34,6 +40,12 @@ function Alert({
   )
 }
 
+/**
+ * 功能：渲染提示信息标题。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -47,6 +59,12 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/**
+ * 功能：渲染提示信息正文。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function AlertDescription({
   className,
   ...props
@@ -63,6 +81,12 @@ function AlertDescription({
   )
 }
 
+/**
+ * 功能：渲染提示信息右侧操作区域。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function AlertAction({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div

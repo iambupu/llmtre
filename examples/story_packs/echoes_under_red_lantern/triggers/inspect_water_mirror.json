@@ -1,0 +1,21 @@
+{
+  "trigger_id": "inspect_water_mirror",
+  "type": "inspect",
+  "label": "水镜中的潮誓",
+  "description": "水镜显出失踪祭船留下的誓约残片。",
+  "effects": ["narrative", "grant_item", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "tide_cellar",
+    "interaction_id": "inspect_water_mirror",
+    "item_id": "tide_oath_shard",
+    "quantity": 1,
+    "quest_id": "recover_the_tide_oath",
+    "quest_status": "active",
+    "target_stage_id": "return_to_dawn",
+    "flag": "tide_oath_shard_recovered",
+    "narrative_text": "水镜不映你的脸，只映出祭船甲板上的一行字：见证者归还沉默，潮钟才准许清晨进镇。",
+    "memory_text": "你从水镜中取回潮誓残片：见证者归还沉默，潮钟才准许清晨进镇。"
+  },
+  "once": true,
+  "priority": 95
+}

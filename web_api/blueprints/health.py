@@ -1,3 +1,7 @@
+"""
+功能：提供 Web 服务健康检查与入口可用性路由。
+"""
+
 from __future__ import annotations
 
 from flask import Blueprint

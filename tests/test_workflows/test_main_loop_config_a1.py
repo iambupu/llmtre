@@ -1,3 +1,7 @@
+"""
+功能：覆盖 main loop config a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -63,7 +67,6 @@ def test_load_main_loop_rules_deep_merges_nested_overrides(tmp_path: Path) -> No
     assert rules["outer_loop"]["emit_world_evolution"] is True
     assert rules["nlu"]["target_aliases"]["dragon_01"] == ["龙"]
     assert rules["nlu"]["target_aliases"]["player_01"] == ["旅行者", "player"]
-    assert rules["default_story_policy"]["background"] == "unfixed"
 
 
 def test_deep_merge_replaces_non_dict_values() -> None:

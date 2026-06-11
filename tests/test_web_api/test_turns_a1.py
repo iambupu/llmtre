@@ -1,3 +1,7 @@
+"""
+功能：覆盖 turns a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -87,6 +91,7 @@ def turns_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[Flask]:
     db_path = str(tmp_path / "runtime.db")
     _init_runtime_db(db_path)
     context = _FakeRuntimeContext(db_path)
+    context.agent_context_dir = str(tmp_path / ".agent_context")
     context.session_store.create_session(
         session_id="sess_a1demo01",
         character_id="player_01",
@@ -234,6 +239,40 @@ def test_create_turn_request_id_idempotent_no_duplicate_advance(turns_client) ->
     assert turns_client.call_count["run_turn"] == 1
 
 
+def test_create_turn_uses_session_runtime_character_id(turns_client) -> None:
+    """
+    功能：验证 Web 请求仍可携带基准角色 ID，但主循环实际使用 session 专属运行角色。
+    入参：turns_client（fixture）：最小 Flask 客户端。
+    出参：None。
+    异常：断言失败表示回合写路径仍可能污染基准角色或其他 session。
+    """
+    runtime_character_id = "pc_sess_a1demo01"
+    context = turns_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    with sqlite3.connect(context.session_store.db_path) as connection:
+        connection.execute(
+            """
+            UPDATE web_sessions
+            SET runtime_character_id = ?
+            WHERE session_id = 'sess_a1demo01'
+            """,
+            (runtime_character_id,),
+        )
+        connection.commit()
+
+    response = turns_client.post(
+        "/api/sessions/sess_a1demo01/turns",
+        json={
+            "request_id": "req_a1runtime01",
+            "user_input": "观察",
+            "character_id": "player_01",
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["active_character"]["id"] == runtime_character_id
+
+
 def test_create_turn_stream_event_order_fixed(turns_client) -> None:
     """
     功能：验证 SSE 阶段事件顺序固定，且最终以 done 事件收敛。
@@ -267,9 +306,7 @@ def test_create_turn_stream_event_order_fixed(turns_client) -> None:
     assert events[-1] == "done"
 
     done_frame = next(frame for frame in frames if "event: done" in frame)
-    done_payload_line = next(
-        line for line in done_frame.splitlines() if line.startswith("data: ")
-    )
+    done_payload_line = next(line for line in done_frame.splitlines() if line.startswith("data: "))
     done_payload = json.loads(done_payload_line.replace("data: ", "", 1))
     assert done_payload["session_turn_id"] == 1
     assert done_payload["runtime_turn_id"] == 99
@@ -368,6 +405,12 @@ def test_create_turn_error_keeps_run_turn_trace_id(
         trace_id: str | None = None,
         request_id: str = "",
     ) -> dict[str, Any]:
+        """
+        功能：提供 failing run turn 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise TurnExecutionError(
             message="boom",
             trace_id=trace_id or "trc_fallback",
@@ -504,6 +547,30 @@ def test_create_turn_updates_memory_policy_before_persist(turns_client) -> None:
     assert session["memory_policy"]["max_turns"] == 5
 
 
+def test_create_turn_syncs_session_agent_memory_file(turns_client) -> None:
+    """
+    功能：验证普通回合写入结构化长期叙事记忆后，同步生成该 session 自己的 Agent 记忆文件。
+    入参：turns_client（fixture）：最小 Flask 客户端。
+    出参：None。
+    异常：断言失败表示 DB 长期记忆与 `.agent_context` 会话文件发生漂移。
+    """
+    response = turns_client.post(
+        "/api/sessions/sess_a1demo01/turns",
+        json={"request_id": "req_agent_memory01", "user_input": "观察四周"},
+    )
+    context = turns_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    memory_path = Path(str(context.agent_context_dir)) / "sessions" / "sess_a1demo01" / "MEMORY.md"
+    memory_text = memory_path.read_text(encoding="utf-8")
+
+    assert response.status_code == 200
+    assert memory_path.exists()
+    assert "长期叙事记忆" in memory_text
+    assert "observe" in memory_text
+    assert "响应:观察四周" in memory_text
+    items = context.session_store.list_narrative_memory_items("sess_a1demo01")
+    assert any(item["kind"] == "discovery" for item in items)
+
+
 def test_create_turn_stream_updates_memory_policy_before_persist(turns_client) -> None:
     """
     功能：验证 SSE 回合复用普通回合 memory 策略解析，并在持久化前写入会话。
@@ -527,6 +594,14 @@ def test_create_turn_stream_updates_memory_policy_before_persist(turns_client) -
     assert response.status_code == 200
     assert "event: done" in raw_text
     assert session["memory_policy"]["max_turns"] == 5
+    memory_path = (
+        Path(str(turns_client.application.extensions["tre_api_context"].agent_context_dir))  # type: ignore[attr-defined]
+        / "sessions"
+        / "sess_a1demo01"
+        / "MEMORY.md"
+    )
+    assert memory_path.exists()
+    assert "响应:观察" in memory_path.read_text(encoding="utf-8")
 
 
 def test_create_turn_stream_error_keeps_run_turn_trace_id(
@@ -549,6 +624,12 @@ def test_create_turn_stream_error_keeps_run_turn_trace_id(
         trace_id: str | None = None,
         request_id: str = "",
     ) -> dict[str, Any]:
+        """
+        功能：提供 failing run turn 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise TurnExecutionError(
             message="回合执行超时",
             trace_id=trace_id or "trc_fallback",
@@ -655,13 +736,19 @@ def test_create_turn_post_run_failure_returns_trace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    功能：验证普通回合 post-run（持久化/契约）失败时返回 INTERNAL_ERROR 且复用 run_turn trace。
+    功能：验证普通回合 post-run 失败时返回 trace，并缓存错误避免同 request_id 重跑主循环。
     入参：turns_client（fixture）；monkeypatch（pytest.MonkeyPatch）。
     出参：None。
-    异常：断言失败表示 post-run 错误链路仍未可观测。
+    异常：断言失败表示 post-run 错误链路不可观测或幂等保护失效。
     """
 
     def failing_persist(*args: Any, **kwargs: Any) -> Any:
+        """
+        功能：提供 failing persist 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("persist failed")
 
     monkeypatch.setattr(
@@ -680,6 +767,17 @@ def test_create_turn_post_run_failure_returns_trace(
     assert body["trace"]["trace_id"] == "trc_fixed_001"
     assert body["trace"]["stages"][-1]["stage"] == "api.persisted"
     assert body["trace"]["stages"][-1]["status"] == "failed"
+    assert turns_client.call_count["run_turn"] == 1
+
+    replay = turns_client.post(
+        "/api/sessions/sess_a1demo01/turns",
+        json={"request_id": "req_a1post_01", "user_input": "观察", "character_id": "player_01"},
+    )
+    replay_body = replay.get_json()
+    assert replay.status_code == 500
+    assert replay_body["error"]["code"] == "INTERNAL_ERROR"
+    assert replay_body["trace_id"] == "trc_fixed_001"
+    assert turns_client.call_count["run_turn"] == 1
 
 
 def test_create_turn_stream_post_run_failure_emits_error_event(
@@ -687,13 +785,19 @@ def test_create_turn_stream_post_run_failure_emits_error_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    功能：验证 SSE post-run 失败不静默中断，而是输出 error 事件并携带 trace。
+    功能：验证 SSE post-run 失败输出 error 事件，并缓存错误避免同 request_id 重跑主循环。
     入参：turns_client（fixture）；monkeypatch（pytest.MonkeyPatch）。
     出参：None。
-    异常：断言失败表示流式协议仍存在静默中断风险。
+    异常：断言失败表示流式协议静默中断或幂等保护失效。
     """
 
     def failing_persist(*args: Any, **kwargs: Any) -> Any:
+        """
+        功能：提供 failing persist 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("persist failed")
 
     monkeypatch.setattr(
@@ -715,6 +819,23 @@ def test_create_turn_stream_post_run_failure_emits_error_event(
     assert payload["trace"]["trace_id"] == "trc_fixed_001"
     assert payload["trace"]["stages"][-1]["stage"] == "api.persisted"
     assert payload["trace"]["stages"][-1]["status"] == "failed"
+    assert turns_client.call_count["run_turn"] == 1
+
+    replay_response = turns_client.post(
+        "/api/sessions/sess_a1demo01/turns/stream",
+        json={"request_id": "req_a1post_sse01", "user_input": "观察", "character_id": "player_01"},
+    )
+    replay_frames = [
+        frame for frame in replay_response.data.decode("utf-8").split("\n\n") if frame.strip()
+    ]
+    replay_error_frame = next(frame for frame in replay_frames if "event: error" in frame)
+    replay_payload_line = next(
+        line for line in replay_error_frame.splitlines() if line.startswith("data: ")
+    )
+    replay_payload = json.loads(replay_payload_line.replace("data: ", "", 1))
+    assert replay_payload["code"] == "INTERNAL_ERROR"
+    assert replay_payload["trace_id"] == "trc_fixed_001"
+    assert turns_client.call_count["run_turn"] == 1
 
 
 def test_create_turn_stream_worker_app_context_failure_emits_error(
@@ -729,18 +850,63 @@ def test_create_turn_stream_worker_app_context_failure_emits_error(
     """
 
     class _BrokenAppContext:
+        """
+        功能：提供 BrokenAppContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_BrokenAppContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __enter__(self) -> None:
+            """
+            功能：实现测试替身的 __enter__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             raise RuntimeError("app context failed")
 
         def __exit__(self, exc_type, exc, traceback) -> bool:  # noqa: ANN001
+            """
+            功能：实现测试替身的 __exit__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return False
 
     class _BrokenApp:
+        """
+        功能：提供 BrokenApp 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_BrokenApp 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def app_context(self) -> _BrokenAppContext:
+            """
+            功能：提供 app context 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return _BrokenAppContext()
 
     class _BrokenCurrentApp:
+        """
+        功能：提供 BrokenCurrentApp 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_BrokenCurrentApp 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def _get_current_object(self) -> _BrokenApp:
+            """
+            功能：提供 get current object 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return _BrokenApp()
 
     monkeypatch.setattr(
@@ -773,13 +939,38 @@ def test_create_turn_stream_worker_exit_without_terminal_event_emits_error(
     """
 
     class _FakeThread:
+        """
+        功能：提供 FakeThread 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeThread 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self, target: Any, daemon: bool = False) -> None:  # noqa: ARG002
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self._started = False
 
         def start(self) -> None:
+            """
+            功能：提供 start 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self._started = True
 
         def is_alive(self) -> bool:
+            """
+            功能：提供 is alive 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return False
 
     monkeypatch.setattr("web_api.blueprints.turns.threading.Thread", _FakeThread)
@@ -808,13 +999,19 @@ def test_create_turn_stream_pre_run_exception_emits_error_event(
     异常：断言失败表示 worker 全链路兜底缺失。
     """
 
-    def failing_get_idempotent_response(*args: Any, **kwargs: Any) -> Any:
+    def failing_reserve_idempotent_request(*args: Any, **kwargs: Any) -> Any:
+        """
+        功能：提供 failing reserve idempotent request 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("idem read failed")
 
     monkeypatch.setattr(
         turns_client.application.extensions["tre_api_context"].session_store,  # type: ignore[attr-defined]
-        "get_idempotent_response",
-        failing_get_idempotent_response,
+        "reserve_idempotent_request",
+        failing_reserve_idempotent_request,
     )
     response = turns_client.post(
         "/api/sessions/sess_a1demo01/turns/stream",
@@ -864,6 +1061,12 @@ def test_create_turn_rejects_invalid_outcome_contract(
         trace_id: str | None = None,
         request_id: str = "",
     ) -> dict[str, Any]:
+        """
+        功能：提供 invalid outcome run turn 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         payload = {
             "session_id": session["session_id"],
             "runtime_turn_id": 99,
@@ -981,6 +1184,112 @@ def test_list_turns_and_get_turn_success(turns_client) -> None:
     assert len(list_body["items"]) >= 1
     assert get_body["session_turn_id"] == created["session_turn_id"]
     assert get_body["user_input"] == "观察周围"
+
+
+def test_list_turns_persists_player_visible_trigger_narrative(
+    turns_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能：验证会话历史保存玩家实际看到的触发器叙事，支持下次进入后原样恢复对话。
+    入参：turns_client（fixture）：最小 Flask 客户端；monkeypatch：替换主循环返回触发器事件。
+    出参：None。
+    异常：断言失败表示持久化文本与出站文本不一致，可能导致续玩时剧情记录丢失。
+    """
+
+    def triggered_run_turn(
+        session: dict[str, Any],
+        user_input: str,
+        character_id: str,
+        sandbox_mode: bool,
+        narrative_stream_callback=None,
+        trace_id: str | None = None,
+        request_id: str = "",
+    ) -> dict[str, Any]:
+        """
+        功能：构造带 narrative trigger 的主循环结果，模拟剧本包追加玩家可见剧情。
+        入参：保持与生产 run_turn 一致；narrative_stream_callback 在本测试中不使用。
+        出参：dict[str, Any]，满足 TurnResult 契约并包含触发器叙事。
+        异常：不抛异常；字段非法会由被测契约校验暴露为测试失败。
+        """
+        if narrative_stream_callback is not None:
+            narrative_stream_callback("基础旁白。")
+        return {
+            "session_id": session["session_id"],
+            "runtime_turn_id": 101,
+            "trace_id": trace_id or "trc_trigger_history",
+            "request_id": request_id,
+            "is_valid": True,
+            "action_intent": {"type": "inspect", "target_id": "sealed_door", "parameters": {}},
+            "physics_diff": {"hp_delta": 0, "mp_delta": 0},
+            "final_response": "基础旁白。",
+            "quick_actions": ["继续调查"],
+            "affordances": [],
+            "is_sandbox_mode": bool(sandbox_mode),
+            "active_character": {"id": character_id, "inventory": []},
+            "scene_snapshot": {
+                "schema_version": "scene_snapshot.v2",
+                "current_location": {"id": "loc_a", "name": "测试地点", "description": "desc"},
+                "visible_npcs": [],
+                "visible_items": [],
+                "active_quests": [],
+                "recent_memory": "",
+                "suggested_actions": [],
+                "scene_objects": [],
+                "exits": [],
+                "interaction_slots": [],
+                "affordances": [],
+                "available_actions": ["inspect"],
+                "ui_hints": {},
+            },
+            "outcome": "valid_action",
+            "clarification_question": "",
+            "failure_reason": "",
+            "suggested_next_step": "继续调查暗门",
+            "should_advance_turn": True,
+            "should_write_story_memory": True,
+            "debug_trace": [],
+            "errors": [],
+            "trigger_events": [
+                {
+                    "trigger_id": "sealed_door_echo",
+                    "type": "inspect",
+                    "label": "暗门回声",
+                    "description": "暗门被线索触发。",
+                    "effects": ["narrative"],
+                    "narrative_text": "暗门在潮声里响了一下。",
+                    "timestamp": "2026-06-11T00:00:00Z",
+                }
+            ],
+            "quest_updates": [],
+            "trace": {
+                "trace_id": trace_id or "trc_trigger_history",
+                "stages": [],
+                "errors": [],
+            },
+        }
+
+    monkeypatch.setattr("web_api.blueprints.turns.run_turn", triggered_run_turn)
+    create_resp = turns_client.post(
+        "/api/sessions/sess_a1demo01/turns",
+        json={
+            "request_id": "req_a1_trigger_history_01",
+            "user_input": "检查暗门",
+            "character_id": "player_01",
+        },
+    )
+    created = create_resp.get_json()
+    list_body = turns_client.get("/api/sessions/sess_a1demo01/turns?page=1&page_size=20").get_json()
+    get_body = turns_client.get(
+        f"/api/sessions/sess_a1demo01/turns/{created['session_turn_id']}",
+    ).get_json()
+
+    visible_text = "基础旁白。 暗门在潮声里响了一下。"
+    assert create_resp.status_code == 200
+    assert created["final_response"] == visible_text
+    assert created["final_response"].count("暗门在潮声里响了一下。") == 1
+    assert list_body["items"][0]["final_response"] == visible_text
+    assert get_body["final_response"] == visible_text
 
 
 def test_get_turn_returns_not_found_for_missing_session_turn_id(turns_client) -> None:

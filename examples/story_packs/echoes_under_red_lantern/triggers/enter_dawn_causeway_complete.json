@@ -1,0 +1,18 @@
+{
+  "trigger_id": "enter_dawn_causeway_complete",
+  "type": "enter_scene",
+  "label": "潮钟准许清晨",
+  "description": "玩家抵达晓桥，主线完成。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "dawn_causeway",
+    "quest_id": "recover_the_tide_oath",
+    "quest_status": "completed",
+    "target_stage_id": "return_to_dawn",
+    "flag": "red_lantern_story_complete",
+    "narrative_text": "晓桥尽头的赤灯一盏接一盏熄灭。远处潮钟响了一下，不响亮，却足够让整座镇子醒来。",
+    "memory_text": "你抵达晓桥，找回潮誓，潮钟重新响起，赤灯事件完成。"
+  },
+  "once": true,
+  "priority": 100
+}

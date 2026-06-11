@@ -1,3 +1,7 @@
+"""
+功能：覆盖 gm context prompt 的回归测试。
+"""
+
 from __future__ import annotations
 
 from agents.gm_agent import GMAgent

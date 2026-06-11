@@ -1,3 +1,7 @@
+"""
+功能：覆盖 clarifier agent a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from agents.clarifier_agent import ClarifierAgent
@@ -102,8 +106,7 @@ def test_clarifier_builds_target_question_for_talk_or_attack() -> None:
     response = agent.clarify(envelope)
 
     assert (
-        response.payload["clarification_question"]
-        == "你想攻击哪个目标？当前可见目标：地精、守卫。"
+        response.payload["clarification_question"] == "你想攻击哪个目标？当前可见目标：地精、守卫。"
     )
     assert response.payload["candidate_inputs"][0] == "攻击地精"
 

@@ -1,3 +1,7 @@
+"""
+功能：覆盖 doc importer mod manager a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -291,9 +295,112 @@ def test_mod_manager_registers_new_mod_from_empty_registry(
             "conflict_strategy": "smart_merge",
             "allowed_fields": [],
             "hooks_manifest": {"on_turn": ["hook"]},
+            "media_manifest": {},
         }
     ]
     assert "注册表更新完成，新增 1 个 MOD" in caplog.text
+
+
+def test_mod_manager_registers_media_manifest_and_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    """
+    功能：验证 MOD 扫描器校验并同步图片、GIF、视频、音频媒体声明。
+    入参：tmp_path（Path）：临时目录；monkeypatch（pytest.MonkeyPatch）：路径替换工具；
+        caplog：日志捕获工具。
+    出参：None。
+    异常：断言失败表示 media_manifest 注册、路径白名单或诊断同步回归。
+    """
+    mods_dir, registry_path = _prepare_mod_paths(tmp_path, monkeypatch)
+    mod_dir = mods_dir / "media_mod"
+    assets_dir = mod_dir / "assets"
+    (assets_dir / "images").mkdir(parents=True)
+    (assets_dir / "gifs").mkdir()
+    (assets_dir / "video").mkdir()
+    (assets_dir / "audio").mkdir()
+    (assets_dir / "images" / "hero.png").write_bytes(b"png")
+    (assets_dir / "gifs" / "loop.gif").write_bytes(b"gif")
+    (assets_dir / "video" / "cutscene.mp4").write_bytes(b"mp4")
+    (assets_dir / "audio" / "theme.mp3").write_bytes(b"mp3")
+    (assets_dir / "images" / "wrong.txt").write_bytes(b"text")
+    (mod_dir / "mod_info.json").write_text(
+        json.dumps(
+            {
+                "mod_id": "media_mod",
+                "name": "Media Mod",
+                "media_manifest": {
+                    "hero": {
+                        "kind": "image",
+                        "src": "images/hero.png",
+                        "alt": "封面图",
+                    },
+                    "loop": {"kind": "gif", "src": "gifs/loop.gif"},
+                    "cutscene": {
+                        "kind": "video",
+                        "src": "video/cutscene.mp4",
+                        "playback": {
+                            "mode": "once",
+                            "controls": False,
+                            "muted": True,
+                            "preload": "auto",
+                            "volume": 0.5,
+                            "start_time_seconds": 0.25,
+                            "end_time_seconds": 2.5,
+                        },
+                    },
+                    "theme": {
+                        "kind": "audio",
+                        "src": "audio/theme.mp3",
+                        "playback": {
+                            "mode": "loop",
+                            "controls": True,
+                            "preload": "metadata",
+                        },
+                    },
+                    "bad_kind": {"kind": "image", "src": "video/cutscene.mp4"},
+                    "bad_path": {"kind": "image", "src": "../outside.png"},
+                    "bad_mime": {
+                        "kind": "image",
+                        "src": "images/hero.png",
+                        "mime_type": "video/mp4",
+                    },
+                    "bad_playback": {
+                        "kind": "video",
+                        "src": "video/cutscene.mp4",
+                        "playback": {
+                            "mode": "once",
+                            "start_time_seconds": 4,
+                            "end_time_seconds": 4,
+                        },
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("WARNING", logger="ModManager"):
+        mod_manager.ModManager().scan_and_register()
+
+    loaded = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    entry = loaded["active_mods"][0]
+    media_manifest = entry["media_manifest"]
+    assert sorted(media_manifest) == ["cutscene", "hero", "loop", "theme"]
+    assert media_manifest["hero"]["mime_type"] == "image/png"
+    assert media_manifest["loop"]["kind"] == "gif"
+    assert media_manifest["cutscene"]["mime_type"] == "video/mp4"
+    assert media_manifest["cutscene"]["playback"]["mode"] == "once"
+    assert media_manifest["cutscene"]["playback"]["muted"] is True
+    assert media_manifest["theme"]["playback"]["mode"] == "loop"
+    assert media_manifest["theme"]["mime_type"] == "audio/mpeg"
+    assert entry["media_diagnostics"]
+    assert "扩展名 .mp4 与 kind=image 不匹配" in caplog.text
+    assert "文件名非法" in caplog.text
+    assert "mime_type 与扩展名不匹配" in caplog.text
+    assert "playback 非法" in caplog.text
 
 
 def test_mod_manager_recovers_from_broken_or_non_mapping_registry(

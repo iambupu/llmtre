@@ -1,3 +1,7 @@
+"""
+功能：覆盖 nlu llm fallback a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -111,6 +115,12 @@ def test_nlu_llm_url_error_is_logged_and_downgraded(monkeypatch, caplog) -> None
     agent = _build_agent_with_llm()
 
     def _raise_url_error(*_args, **_kwargs):
+        """
+        功能：提供 raise url error 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr("urllib.request.urlopen", _raise_url_error)
@@ -132,6 +142,12 @@ def test_nlu_llm_invalid_payload_type_logs_reason(monkeypatch, caplog) -> None:
     response_text = json.dumps(["not", "object"], ensure_ascii=False)
 
     def _fake_urlopen(*_args, **_kwargs):
+        """
+        功能：提供 fake urlopen 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return _FakeHTTPResponse(response_text)
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
@@ -150,11 +166,17 @@ def test_nlu_llm_schema_validation_failed_logs_reason(monkeypatch, caplog) -> No
     """
     agent = _build_agent_with_llm()
     response_text = json.dumps(
-        {"response": "{\"type\":\"teleport\",\"parameters\":{}}"},
+        {"response": '{"type":"teleport","parameters":{}}'},
         ensure_ascii=False,
     )
 
     def _fake_urlopen(*_args, **_kwargs):
+        """
+        功能：提供 fake urlopen 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return _FakeHTTPResponse(response_text)
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)

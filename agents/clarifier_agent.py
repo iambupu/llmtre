@@ -61,26 +61,30 @@ class ClarifierAgent:
             labels = self._labels(scene.get("exits"), "label", "location_id")
             return (
                 f"你想往哪个方向走？当前可选出口：{'、'.join(labels)}。"
-                if labels else "你想往哪里走？当前没有明确出口。"
+                if labels
+                else "你想往哪里走？当前没有明确出口。"
             )
         if action_type in {"talk", "attack"}:
             labels = self._labels(scene.get("visible_npcs"), "name", "entity_id")
             verb = "攻击" if action_type == "attack" else "交谈"
             return (
                 f"你想{verb}哪个目标？当前可见目标：{'、'.join(labels)}。"
-                if labels else f"你想{verb}谁？当前没有明确可见目标。"
+                if labels
+                else f"你想{verb}谁？当前没有明确可见目标。"
             )
         if action_type == "use_item":
             item_labels = self._enabled_affordance_labels(scene, "use_item")
             return (
                 f"你想使用哪个物品？当前可用物品：{'、'.join(item_labels)}。"
-                if item_labels else "你想使用哪个物品？"
+                if item_labels
+                else "你想使用哪个物品？"
             )
         if action_type in {"inspect", "interact"}:
             labels = self._labels(scene.get("scene_objects"), "label", "object_id")
             return (
                 f"你想处理哪个对象？当前可选对象：{'、'.join(labels[:6])}。"
-                if labels else "你想检查或互动哪个对象？"
+                if labels
+                else "你想检查或互动哪个对象？"
             )
         return "我还没有理解你的行动，你想观察、移动、交谈，还是检查某个对象？"
 

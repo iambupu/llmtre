@@ -5,6 +5,7 @@
 /state/core_data/
 /logs/
 /test_runs/
+/.agent_context/sessions/
 *.db
 *.db-*
 *.sqlite
@@ -54,6 +55,19 @@ dist/
 /code_review.md
 /.code_md/
 /.coding_docs/
+/.agent_context/*.log
+/.agent_context/*.png
+/.agent_context/**/*.log
+/.agent_context/**/*.png
+
+# tre_doc 是本地 Obsidian/生成文档工作区，Release 代码提交不携带文档产物
+/tre_doc/.obsidian/
+/tre_doc/assets/
+/tre_doc/current_project_state/
+/tre_doc/static_reference/
+/tre_doc/templates/
+/tre_doc/00_Obsidian首页.md
+/tre_doc/99_Obsidian维护规范.md
 
 # 本地临时目录与工具工作区
 /tmp_pytest*/

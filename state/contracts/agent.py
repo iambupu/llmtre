@@ -14,7 +14,10 @@ class AgentEnvelope(BaseModel):
     功能：约束 A1 阶段进程内 Agent 消息，避免用散乱 dict 传递关键上下文。
     入参：trace_id（str）：请求级追踪号；turn_id（int | str）：运行回合或会话回合标识；
         sender/recipient/kind（str）：消息路由元数据；payload（dict）：结构化负载；
-        ack_required（bool，默认 False）：是否需要确认。
+        ack_required（bool，默认 False）：是否需要确认；
+        pack_id（str | None，默认 None）：当前剧本包标识，可选；
+        scene_id（str | None，默认 None）：当前场景标识，可选；
+        lore_hits（list[str]，默认空）：命中的 lore 条目 ID 列表。
     出参：AgentEnvelope，可通过 model_dump 传递给内部 Agent。
     异常：字段类型非法时由 Pydantic 抛出 ValidationError。
     """
@@ -26,6 +29,9 @@ class AgentEnvelope(BaseModel):
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
     ack_required: bool = False
+    pack_id: str | None = None
+    scene_id: str | None = None
+    lore_hits: list[str] = Field(default_factory=list)
 
 
 class GMOutputBlock(BaseModel):

@@ -1,8 +1,13 @@
+"""
+功能：在受限上下文中评估 MOD 动态脚本钩子。
+"""
+
 import ast
 import logging
 from typing import Any
 
 logger = logging.getLogger("ScriptEvaluator")
+
 
 class ScriptEvaluator:
     """脚本判定器：提供受限 Python 执行与 LLM 判定接口（非安全沙箱）。"""

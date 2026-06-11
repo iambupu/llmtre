@@ -1,0 +1,21 @@
+{
+  "trigger_id": "inspect_tide_ledger",
+  "type": "inspect",
+  "label": "账册里的第二艘船",
+  "description": "潮税账册证明失踪夜还有一艘未登记的小船靠过钟院后门。",
+  "effects": ["narrative", "grant_item", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "ledgers_room",
+    "interaction_id": "inspect_tide_ledger",
+    "item_id": "ledger_rubbing",
+    "quantity": 1,
+    "quest_id": "recover_the_tide_oath",
+    "quest_status": "active",
+    "target_stage_id": "unseal_the_bell",
+    "flag": "ledger_second_boat_found",
+    "narrative_text": "账册夹页里有一笔被墨水压暗的渡税：同夜第二艘小船靠过钟院后门，登记人只写了一个「莫」。",
+    "memory_text": "潮税账册显示失踪夜另有小船靠过钟院后门，线索指向赤灯巷和钟院。"
+  },
+  "once": true,
+  "priority": 90
+}

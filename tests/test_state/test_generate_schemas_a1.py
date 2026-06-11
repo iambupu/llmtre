@@ -1,3 +1,7 @@
+"""
+功能：覆盖 generate schemas a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import builtins

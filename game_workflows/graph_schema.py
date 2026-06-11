@@ -2,11 +2,12 @@
 TypedDict / Pydantic 状态流转数据结构严格定义
 """
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class StatusEffectState(TypedDict):
     """角色派生状态效果"""
+
     key: str
     label: str
     kind: str
@@ -16,6 +17,7 @@ class StatusEffectState(TypedDict):
 
 class StatusContextState(TypedDict):
     """面向 Agent 的角色状态上下文"""
+
     resource_state: str
     flags: list[str]
     prompt_text: str
@@ -23,6 +25,7 @@ class StatusContextState(TypedDict):
 
 class CharacterState(TypedDict):
     """角色状态"""
+
     id: str
     name: str
     hp: int
@@ -39,6 +42,7 @@ class CharacterState(TypedDict):
 
 class WorldState(TypedDict, total=False):
     """世界状态"""
+
     current_time_minutes: int
     weather: str
     active_events: list[str]
@@ -51,17 +55,24 @@ class WorldState(TypedDict, total=False):
 
 class SceneExitState(TypedDict):
     """场景出口状态"""
+
     direction: str
     location_id: str
     label: str
     aliases: list[str]
+    asset_id: NotRequired[str]
+    conditions: NotRequired[list[str]]
+    enabled: NotRequired[bool]
+    disabled_reason: NotRequired[str]
 
 
 class SceneSnapshot(TypedDict):
     """回合场景快照"""
+
     schema_version: str
     current_location: dict[str, Any]
     exits: list[SceneExitState]
+    interactables: list[dict[str, Any]]
     visible_npcs: list[dict[str, Any]]
     visible_items: list[dict[str, Any]]
     active_quests: list[dict[str, Any]]
@@ -78,6 +89,7 @@ class FlowState(TypedDict):
     """
     LangGraph 节点间流转的核心数据结构 (内环状态)
     """
+
     # 1. 玩家原始输入
     user_input: str
     active_character_id: str
@@ -118,3 +130,18 @@ class FlowState(TypedDict):
     scene_snapshot: SceneSnapshot | None
     active_character: CharacterState | None
     outer_emit_result: dict[str, Any]
+
+    # 8. 剧本包场景定义（可选，用于覆盖 DB 出口校验）
+    pack_scene: Any | None
+    # 9. current scene ID
+    current_scene_id: str
+
+    # 10. A2-Plus: runtime trigger/quest tracking
+    trigger_events: list[dict[str, Any]]
+    quest_states: list[dict[str, Any]]
+    quest_updates: list[dict[str, Any]]
+    fired_trigger_ids: list[str]
+    pack_runtime_errors: list[dict[str, Any]]
+    session_metadata: dict[str, Any]
+    pack_bundle_triggers: dict[str, Any] | None
+    pack_bundle_quests: dict[str, Any] | None

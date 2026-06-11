@@ -1,0 +1,79 @@
+{
+  "scene_id": "ledgers_room",
+  "display_name": "旧账房",
+  "summary": "旧账房的窗纸被潮气泡软，墙上挂着三年前的渡税牌。账簿按月份堆成小山，只有祭船失踪那晚的一册被人反复翻动。",
+  "exits": [
+    {
+      "target_scene_id": "ferry_landing",
+      "label": "从前门回渡口",
+      "aliases": [
+        "渡口",
+        "码头",
+        "前门",
+        "南"
+      ]
+    },
+    {
+      "target_scene_id": "red_lantern_lane",
+      "label": "从后门回赤灯巷",
+      "aliases": [
+        "赤灯巷",
+        "后门",
+        "巷子",
+        "西"
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_tide_ledger",
+      "label": "检查潮税账册",
+      "kind": "inspect",
+      "target_ref": "tide_ledger",
+      "aliases": [
+        "账册",
+        "潮税账册",
+        "祭船记录"
+      ]
+    },
+    {
+      "interaction_id": "talk_scribe_yan",
+      "label": "询问账房燕书吏",
+      "kind": "talk",
+      "target_ref": "scribe_yan",
+      "aliases": [
+        "燕书吏",
+        "书吏",
+        "账房先生"
+      ]
+    }
+  ],
+  "visible_npcs": [
+    {
+      "id": "scribe_yan",
+      "label": "燕书吏",
+      "aliases": [
+        "书吏",
+        "账房先生"
+      ]
+    }
+  ],
+  "visible_items": [
+    {
+      "id": "tide_ledger",
+      "label": "潮税账册",
+      "aliases": [
+        "账册",
+        "祭船记录"
+      ]
+    },
+    {
+      "id": "old_tax_plate",
+      "label": "旧渡税牌",
+      "aliases": [
+        "税牌",
+        "渡税牌"
+      ]
+    }
+  ]
+}

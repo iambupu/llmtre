@@ -1,0 +1,33 @@
+{
+  "quest_id": "recover_the_tide_oath",
+  "title": "找回潮誓",
+  "description": "赤灯提前亮起，鹭潮镇三年前的失踪祭船重新留下痕迹。你需要追查目击证词、旧账册、静默潮钟和水镜，找回被藏起的潮誓。",
+  "stages": [
+    {
+      "stage_id": "read_the_notice",
+      "label": "确认赤灯异常",
+      "description": "在渡口确认赤灯为何提前亮起，并找到第一条线索。"
+    },
+    {
+      "stage_id": "compare_witnesses",
+      "label": "比对证词与账册",
+      "description": "从船夫、守灯人和旧账册中找出祭船失踪夜的矛盾。"
+    },
+    {
+      "stage_id": "unseal_the_bell",
+      "label": "解除潮钟沉默",
+      "description": "前往钟院，查明潮钟为何被红线缠住。"
+    },
+    {
+      "stage_id": "recover_oath",
+      "label": "取回水镜中的潮誓",
+      "description": "在潮下水窖找到水镜，取回失踪祭船留下的誓约残片。"
+    },
+    {
+      "stage_id": "return_to_dawn",
+      "label": "把沉默交给清晨",
+      "description": "沿退潮露出的石梁抵达晓桥，让潮钟重新响起。"
+    }
+  ],
+  "start_stage_id": "read_the_notice"
+}

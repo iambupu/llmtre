@@ -1,3 +1,7 @@
+"""
+功能：覆盖 app factory a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

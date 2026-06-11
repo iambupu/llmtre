@@ -1,3 +1,7 @@
+"""
+功能：加载和规范化主循环规则配置。
+"""
+
 from __future__ import annotations
 
 import copy
@@ -64,9 +68,7 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
             "player_01": ["旅行者", "player"],
         },
         "location_aliases": {},
-        "item_aliases": {
-            "health_potion_01": ["药水", "potion"],
-        },
+        "item_aliases": {},
     },
     "resolution": {
         "attack": {
@@ -76,9 +78,9 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
             "strength_damage_divisor": 3,
             "min_damage": 1,
         },
-        "move": {"mp_delta": -1, "state_flags_add": ["moved_recently"]},
-        "talk": {"mp_delta": -1, "state_flags_add": ["conversation_started"]},
-        "interact": {"mp_delta": -1, "state_flags_add": ["observed_surroundings"]},
+        "move": {"state_flags_add": ["moved_recently"]},
+        "talk": {"state_flags_add": ["conversation_started"]},
+        "interact": {"state_flags_add": ["observed_surroundings"]},
         "commit_sandbox": {"state_flags_add": ["sandbox_merged"]},
         "discard_sandbox": {"state_flags_add": ["sandbox_discarded"]},
     },
@@ -90,15 +92,6 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
     "memory": {
         "summary_step": 0,
         "summary_context_size": 20,
-    },
-    "default_story_policy": {
-        "mode": "open_seed",
-        "background": "unfixed",
-        "instruction": (
-            "默认剧本不是固定世界或固定关卡。每个新会话从空白、低约束的冒险起点生成，"
-            "地点、目标、冲突、NPC 和线索都应由本次开场叙事临场创建；"
-            "不要默认使用森林、营地、地精或任何固定背景。"
-        ),
     },
     "character_status": {
         "stable_summary": "状态稳定",
@@ -143,6 +136,97 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
                 "severity": "info",
                 "description": "角色已进入对话节奏，叙事可承接 NPC 反馈。",
             },
+            "inspected_surroundings": {
+                "label": "仔细检查",
+                "kind": "awareness",
+                "severity": "info",
+                "description": "角色刚检查过场景细节，叙事可承接线索发现。",
+            },
+            "rested_recently": {
+                "label": "短暂休整",
+                "kind": "activity",
+                "severity": "info",
+                "description": "角色刚刚恢复片刻，叙事可体现状态回稳。",
+            },
+            # 赤灯剧本线索状态：这些 flag 来自 Story Pack 触发器，必须在后端就变成玩家可读文案。
+            "red_lantern_case_started": {
+                "label": "赤灯事件展开",
+                "kind": "clue",
+                "severity": "info",
+                "description": "赤灯提前亮起，调查主线已经展开。",
+            },
+            "notice_scraped_name_found": {
+                "label": "发现潮汐告示线索",
+                "kind": "clue",
+                "severity": "info",
+                "description": "潮汐告示露出被刮去的船名，线索指向三年前的祭船。",
+            },
+            "boatman_heard_wrong_bell": {
+                "label": "听到错钟证词",
+                "kind": "clue",
+                "severity": "info",
+                "description": "船夫任伯提到失踪夜的钟声不对，证词指向潮钟。",
+            },
+            "scribe_yan_missing_page": {
+                "label": "燕书吏证实缺页",
+                "kind": "clue",
+                "severity": "info",
+                "description": "账房书吏承认旧账册曾被抽走一页，线索继续指向赤灯巷。",
+            },
+            "ledger_second_boat_found": {
+                "label": "发现第二艘船线索",
+                "kind": "clue",
+                "severity": "info",
+                "description": "潮税账册证明失踪夜另有小船靠过钟院后门。",
+            },
+            "lantern_keeper_knows_oath": {
+                "label": "得知潮誓传闻",
+                "kind": "clue",
+                "severity": "info",
+                "description": "守灯人莫婶说出旧誓约的传闻，调查继续指向钟院。",
+            },
+            "three_knot_order_seen": {
+                "label": "看见三结顺序",
+                "kind": "clue",
+                "severity": "info",
+                "description": "赤灯绳结暴露了祭船失踪夜留下的顺序线索。",
+            },
+            "stone_mender_revealed_stairs": {
+                "label": "发现钟后石阶",
+                "kind": "clue",
+                "severity": "info",
+                "description": "石匠阿砺透露钟院后方有通往水窖的旧石阶。",
+            },
+            "silent_bell_unsealed": {
+                "label": "静默潮钟已解封",
+                "kind": "clue",
+                "severity": "info",
+                "description": "潮钟红线标出通往水窖的路径，下一步可寻找潮誓。",
+            },
+            "salt_lock_maintained": {
+                "label": "盐锁仍在维持",
+                "kind": "clue",
+                "severity": "info",
+                "description": "水窖旧锁仍封着潮下通道，证明封存仪式仍未完全解除。",
+            },
+            "tide_oath_shard_recovered": {
+                "label": "找回潮誓碎片",
+                "kind": "clue",
+                "severity": "info",
+                "description": "水镜显出潮誓残片，玩家已经拿到通往晓桥的关键线索。",
+            },
+            "dawn_bridge_seen": {
+                "label": "看见晓桥",
+                "kind": "clue",
+                "severity": "info",
+                "description": "晓桥桥面留下盐晶，赤灯事件已经收束。",
+            },
+            "red_lantern_story_complete": {
+                "label": "赤灯事件完成",
+                "kind": "milestone",
+                "severity": "info",
+                "description": "玩家抵达晓桥，找回潮誓，潮钟重新响起。",
+            },
             "observed_surroundings": {
                 "label": "警觉观察",
                 "kind": "awareness",
@@ -185,6 +269,30 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
             "keen_observer": {"hp_delta": 1},
         },
     },
+    "scene_defaults": {
+        "locations": {
+            "unknown": {
+                "id": "unknown",
+                "name": "未知地点",
+                "description": "当前没有绑定外部剧本场景。",
+                "exits": [],
+                "visible_items": [],
+                "visible_npcs": [],
+            },
+        },
+        "available_actions": [
+            "move",
+            "observe",
+            "wait",
+            "rest",
+            "talk",
+            "attack",
+            "inspect",
+            "interact",
+            "use_item",
+        ],
+        "suggested_actions": [],
+    },
     "narrative_templates": {
         "invalid": "{actor_name}的行动未能成立：{errors}",
         "idle": "{actor_name}暂时没有采取有效行动。",
@@ -196,10 +304,10 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
             "{actor_name}发起了攻击，但未能命中 {target_id}。"
             "判定 {attack_roll} 未达到 {attack_dc}。"
         ),
-        "talk": "{actor_name}与 {target_id} 进行交谈，消耗了 {mp_cost} 点法力。",
-        "move": "{actor_name}前往了 {location_id}，消耗了 {mp_cost} 点法力。",
+        "talk": "{actor_name}与 {target_id} 进行交谈。",
+        "move": "{actor_name}前往了 {location_id}。",
         "use_item": "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。",
-        "interact": "{actor_name}仔细观察了周围环境，消耗了 {mp_cost} 点法力。",
+        "interact": "{actor_name}仔细观察了周围环境。",
         "commit_sandbox": "{actor_name}将沙盒剧情并入了主线，当前世界状态已更新。",
         "discard_sandbox": "{actor_name}放弃了沙盒剧情，世界状态已回滚到主线。",
         "default": "{actor_name}完成了 {action_type} 行动。",
@@ -263,7 +371,7 @@ def _load_json_mapping(path: str) -> dict[str, Any]:
     try:
         with open(path, encoding="utf-8") as file:
             loaded = json.load(file)
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
 
@@ -280,7 +388,7 @@ def _load_mod_registry() -> dict[str, Any]:
     try:
         with open(MOD_REGISTRY_PATH, encoding="utf-8") as file:
             loaded = yaml.safe_load(file)
-    except (yaml.YAMLError, OSError):
+    except yaml.YAMLError, OSError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
 

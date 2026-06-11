@@ -1,3 +1,7 @@
+"""
+功能：提供 vampire_mod 的动态脚本钩子示例。
+"""
+
 from typing import Any
 
 from core.event_bus import STOP_PROPAGATION

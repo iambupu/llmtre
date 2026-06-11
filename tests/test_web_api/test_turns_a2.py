@@ -1,3 +1,7 @@
+"""
+功能：覆盖 turns a2 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -75,7 +79,11 @@ def _init_runtime_db(db_path: Path) -> None:
         connection.commit()
 
 
-def _client(case_root: Path, monkeypatch: Any) -> Any:
+def _client(
+    case_root: Path,
+    monkeypatch: Any,
+    seen_metadata: list[dict[str, Any]] | None = None,
+) -> Any:
     """
     功能：构造带 pack 绑定 session 的 turns 测试客户端。
     入参：case_root（Path）：测试目录；monkeypatch（Any）：pytest monkeypatch。
@@ -119,6 +127,22 @@ def _client(case_root: Path, monkeypatch: Any) -> Any:
         出参：dict[str, Any]，最小有效回合结果。
         异常：不抛异常。
         """
+        metadata = dict(session.get("session_metadata", {}))
+        if seen_metadata is not None:
+            seen_metadata.append(metadata)
+        fired_ids = list(metadata.get("fired_trigger_ids", []))
+        if "fake_once_trigger" not in fired_ids:
+            fired_ids.append("fake_once_trigger")
+        quest_states = [
+            {
+                "quest_id": "find_the_key",
+                "status": "locked",
+                "current_stage_id": "find_clue",
+                "data": {},
+                "started_at": None,
+                "updated_at": None,
+            }
+        ]
         if narrative_stream_callback is not None:
             narrative_stream_callback("雾气涌动。")
         return {
@@ -157,6 +181,25 @@ def _client(case_root: Path, monkeypatch: Any) -> Any:
             "should_write_story_memory": True,
             "debug_trace": [],
             "errors": [],
+            "trigger_events": [
+                {
+                    "trigger_id": "fake_once_trigger",
+                    "type": "enter_scene",
+                    "label": "Fake once",
+                    "description": "Fake once trigger",
+                    "effects": ["narrative"],
+                    "narrative_text": "雾林路标背面露出一行新刻的潮湿字迹。",
+                    "memory_text": "玩家发现雾林路标背面的新刻字迹。",
+                    "timestamp": "2026-05-07T00:00:00Z",
+                }
+            ],
+            "quest_updates": quest_states,
+            "quest_states": quest_states,
+            "fired_trigger_ids": fired_ids,
+            "session_metadata": {
+                "fired_trigger_ids": fired_ids,
+                "quest_states": quest_states,
+            },
         }
 
     monkeypatch.setattr("web_api.blueprints.turns.ensure_character_available", lambda _cid: True)
@@ -191,6 +234,8 @@ def test_create_turn_and_stream_preserve_pack_session_metadata(monkeypatch: Any)
         assert normal.status_code == 200
         assert stream.status_code == 200
         assert "event: done" in raw_stream
+        normal_payload = normal.get_json()
+        assert "雾林路标背面露出一行新刻的潮湿字迹。" in normal_payload["final_response"]
         assert session is not None
         assert session["pack_id"] == "demo_a2_core"
         assert session["scenario_id"] == "default"
@@ -201,5 +246,42 @@ def test_create_turn_and_stream_preserve_pack_session_metadata(monkeypatch: Any)
         payload_line = next(line for line in done_frame.splitlines() if line.startswith("data: "))
         done_payload = json.loads(payload_line.replace("data: ", "", 1))
         assert done_payload["session_turn_id"] == 2
+        assert "雾林路标背面露出一行新刻的潮湿字迹。" in done_payload["final_response"]
+    finally:
+        shutil.rmtree(case_root, ignore_errors=True)
+
+
+def test_turn_routes_persist_a2_runtime_metadata(monkeypatch: Any) -> None:
+    """
+    功能：验证普通回合会持久化 A2 runtime metadata，下一回合可从 session 读取。
+    入参：monkeypatch（Any）：pytest monkeypatch。
+    出参：None。
+    异常：断言失败表示 once trigger 或 quest runtime 状态跨 Web 回合丢失。
+    """
+    case_root = _make_case_root("turns_a2_runtime_metadata")
+    seen_metadata: list[dict[str, Any]] = []
+    try:
+        client = _client(case_root, monkeypatch, seen_metadata=seen_metadata)
+        first = client.post(
+            "/api/sessions/sess_a2pack01/turns",
+            json={"request_id": "req_a2_runtime_01", "user_input": "观察路标"},
+        )
+        second = client.post(
+            "/api/sessions/sess_a2pack01/turns",
+            json={"request_id": "req_a2_runtime_02", "user_input": "继续观察"},
+        )
+        session = client.application.extensions["tre_api_context"].session_store.get_session(  # type: ignore[attr-defined]
+            "sess_a2pack01"
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert seen_metadata[0] == {}
+        assert "fake_once_trigger" in seen_metadata[1].get("fired_trigger_ids", [])
+        assert session is not None
+        session_metadata = session["session_metadata"]
+        assert "fake_once_trigger" in session_metadata.get("fired_trigger_ids", [])
+        quest_states = session_metadata.get("quest_states", [])
+        assert quest_states[0]["quest_id"] == "find_the_key"
     finally:
         shutil.rmtree(case_root, ignore_errors=True)

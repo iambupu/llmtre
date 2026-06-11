@@ -6,6 +6,7 @@ from flask import Flask
 
 from web_api.blueprints.health import health_blueprint
 from web_api.blueprints.memory import memory_blueprint
+from web_api.blueprints.mods import mods_blueprint
 from web_api.blueprints.playground import playground_blueprint
 from web_api.blueprints.runtime import runtime_blueprint
 from web_api.blueprints.sandbox import sandbox_blueprint
@@ -36,6 +37,7 @@ def create_app() -> Flask:
     app.register_blueprint(story_packs_blueprint)
     app.register_blueprint(turns_blueprint)
     app.register_blueprint(memory_blueprint)
+    app.register_blueprint(mods_blueprint)
     app.register_blueprint(sandbox_blueprint)
     app.register_blueprint(runtime_blueprint)
     return app

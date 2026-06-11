@@ -4,6 +4,10 @@ export type ApiFailure = {
   ok: false;
   trace_id?: string;
   error?: { code?: string; message?: string };
+  trigger_events?: unknown[];
+  quest_updates?: unknown[];
+  pack_quests?: unknown[];
+  pack_triggers?: unknown[];
   trace?: unknown;
 };
 
@@ -42,12 +46,14 @@ export type ActiveCharacter = Record<string, unknown> & {
 export type SessionPayload = {
   session_id: string;
   character_id?: string;
+  runtime_character_id?: string;
   current_session_turn_id?: number;
   sandbox_mode?: boolean;
   pack_id?: string | null;
   scenario_id?: string | null;
   pack_version?: string | null;
   compiled_artifact_hash?: string | null;
+  current_scene_id?: string | null;
   persona_profile?: Record<string, unknown>;
   quick_actions?: string[];
   quick_action_candidates?: Array<{
@@ -66,6 +72,68 @@ export type SessionPayload = {
   active_character?: ActiveCharacter | null;
   scene_snapshot?: SceneSnapshot | null;
   memory_summary?: string;
+  created_at?: string;
+  last_active_at?: string;
+};
+
+export type SessionSummary = {
+  session_id: string;
+  character_id?: string;
+  base_character_id?: string;
+  runtime_character_id?: string;
+  sandbox_mode?: boolean;
+  current_session_turn_id: number;
+  memory_summary?: string;
+  pack_id?: string | null;
+  pack_title?: string | null;
+  scenario_id?: string | null;
+  pack_version?: string | null;
+  compiled_artifact_hash?: string | null;
+  current_scene_id?: string | null;
+  current_scene_title?: string | null;
+  created_at?: string;
+  last_active_at?: string;
+  updated_at?: string;
+};
+
+export type SessionListPayload = {
+  items: SessionSummary[];
+  total: number;
+  limit: number;
+};
+
+export type DeleteSessionPayload = {
+  deleted_session_id: string;
+  character_id?: string;
+  base_character_id?: string;
+  runtime_character_id?: string;
+  deleted_sessions?: number;
+  deleted_turns?: number;
+  deleted_memory_items?: number;
+  deleted_idempotency_keys?: number;
+  deleted_shadow_state?: boolean;
+  runtime_character_owned?: boolean;
+  deleted_entities_active?: number;
+  deleted_inventory_active?: number;
+  deleted_entities_shadow?: number;
+  deleted_inventory_shadow?: number;
+  deleted_agent_memory?: boolean;
+};
+
+export type TurnSummary = {
+  session_turn_id: number;
+  is_valid: boolean;
+  user_input: string;
+  final_response: string;
+  created_at: string;
+};
+
+export type TurnListPayload = {
+  session_id: string;
+  page: number;
+  page_size: number;
+  total: number;
+  items: TurnSummary[];
 };
 
 export type StoryPackSummary = {
@@ -74,15 +142,43 @@ export type StoryPackSummary = {
   version: string;
   scenario_id: string;
   start_scene_id: string;
+  start_scene_title: string;
   compiled_artifact_hash: string;
+  source_background_hash?: string | null;
   scene_count: number;
   interaction_count: number;
+  quest_count: number;
+  trigger_count: number;
+  asset_count: number;
   diagnostics: string[];
 };
 
 export type StoryPackListPayload = {
   packs: StoryPackSummary[];
   diagnostics: Record<string, string[]>;
+};
+
+export type StoryPackDetailPayload = {
+  summary: StoryPackSummary;
+  manifest: Record<string, unknown>;
+  scenes: Record<string, unknown>[];
+};
+
+export type StoryPackImportPayload = {
+  manifest: Record<string, unknown>;
+  scenes: Record<string, Record<string, unknown>> | Record<string, unknown>[];
+  lore?: Record<string, string>;
+  quests?: Record<string, Record<string, unknown>> | Record<string, unknown>[];
+  triggers?: Record<string, Record<string, unknown>> | Record<string, unknown>[];
+  asset_files?: Record<string, string>;
+};
+
+export type StoryPackImportResult = {
+  summary: StoryPackSummary;
+};
+
+export type StoryPackDeletePayload = {
+  deleted_pack_id: string;
 };
 
 export type SceneAffordance = {
@@ -117,7 +213,32 @@ export type SceneObjectRef = {
   description?: string;
   state_tags?: string[];
   source_ref?: Record<string, unknown>;
+  asset_url?: string;
+  background_asset_url?: string;
+  image_asset_url?: string;
+  portrait_asset_url?: string;
+  icon_asset_url?: string;
   priority?: number;
+};
+
+export type SceneAssetRef = {
+  asset_id: string;
+  kind: string;
+  media_type?: "image" | "gif" | "video" | "audio" | string | null;
+  src: string;
+  url?: string;
+  alt?: string;
+  caption?: string | null;
+  mime_type?: string | null;
+  playback?: {
+    mode?: "manual" | "once" | "loop" | string | null;
+    controls?: boolean | null;
+    muted?: boolean | null;
+    preload?: "none" | "metadata" | "auto" | string | null;
+    volume?: number | null;
+    start_time_seconds?: number | null;
+    end_time_seconds?: number | null;
+  } | null;
 };
 
 export type SceneSnapshot = {
@@ -133,6 +254,7 @@ export type SceneSnapshot = {
   scene_objects?: SceneObjectRef[];
   interaction_slots?: InteractionSlot[];
   affordances?: SceneAffordance[];
+  assets?: Record<string, SceneAssetRef>;
   ui_hints?: Record<string, unknown>;
 };
 
@@ -168,6 +290,11 @@ export type TurnResult = {
   should_advance_turn?: boolean;
   should_write_story_memory?: boolean;
   errors?: string[];
+  trigger_events?: unknown[];
+  quest_updates?: unknown[];
+  pack_runtime_errors?: unknown[];
+  pack_quests?: unknown[];
+  pack_triggers?: unknown[];
   trace?: unknown;
 };
 

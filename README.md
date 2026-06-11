@@ -137,7 +137,7 @@ npm run build
 进一步说明：
 
 - 玩家游玩流程见 [PLAY_GUIDE.md](PLAY_GUIDE.md)。
-- `/app` 是当前推荐试玩入口；`/play` 保留用于兼容、对照和调试验收。
+- `/app` 是当前推荐试玩入口，支持 Story Pack 选择、预览、导入和非官方包删除；`/play` 保留用于兼容、对照和调试验收。
 
 ## 常用开发命令
 
@@ -153,6 +153,15 @@ python state/tools/db_initializer.py
 
 - 首次运行项目。
 - 数据库缺失或需要重置试玩状态。
+
+### A2 Story Pack 验收
+
+```bash
+python -m tools.packs.validate examples/story_packs/demo_a2_core
+python examples/demo_playthrough.py
+```
+
+`/app` 可选择用户导入的 pack 创建会话，也可导入 JSON 文件集合形式的自定义 pack。
 - 修改 `state/models/` 或 `state/data/` 后需要重建本地状态库。
 
 ### 导入知识库并重建索引
@@ -347,9 +356,10 @@ uv run python app.py
 
 - `AGENTS.md`：Agent 上下文分层、读写边界和协作规范
 - `OPS.md`：工具调用、数据流和错误记录规范
-- `MEMORY.md`：跨会话长期剧情摘要池
+- `MEMORY.md`：全局模板/兼容入口
+- `sessions/<session_id>/MEMORY.md`：每个游戏会话自己的长期剧情摘要文件
 
-运行时，主循环会只读加载 `.agent_context/MEMORY.md`，过滤空模板和占位注释后，与 Web 会话近期记忆合并到 `SceneSnapshot.recent_memory`。该内容只影响 Agent 叙事上下文，不参与动作合法性、数值判定或状态写入。
+运行时，主循环会按当前 `session_id` 只读加载 `.agent_context/sessions/<session_id>/MEMORY.md`，过滤空模板和占位注释后，与 Web 会话近期记忆合并到 `SceneSnapshot.recent_memory`。Web 回合成功写入、手动 memory refresh 和 reset 会同步该会话文件；该内容只影响 Agent 叙事上下文，不参与动作合法性、数值判定或状态写入。
 
 ### `config/rag_import_rules.json`
 
@@ -396,7 +406,6 @@ uv run python app.py
 - `docs/`：本地规则书与设定文档输入目录，默认被 Git 忽略
 - `knowledge_base/`：RAG 向量与图谱索引输出目录
 - `.agent_context/`：本地 Agent 上下文规范与长期叙事摘要
-- `tre_doc/`：集中技术文档引用目录，由子模块详解文档汇集而成
 - `app.py`：Flask 开发服务启动入口
 - `pyproject.toml`：项目元数据、打包配置和 lint/type-check 配置
 
@@ -463,5 +472,5 @@ python -m tools.logs.check_runtime_logs
 
 ## 版本信息
 
-- 当前版本：A2（Alpha 2）
+- 当前版本：A2-Release 开发态（Story Pack 管理与演示收口）
 - 更新日志：见 [CHANGELOG.md](CHANGELOG.md)

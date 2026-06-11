@@ -6,17 +6,93 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
+from state.contracts.quest import QuestDef
 from state.contracts.story_pack import (
     StoryPackBundle,
     StoryPackManifest,
     StoryPackSceneDef,
     StoryPackSummary,
+    StoryPackVisibleRefDef,
 )
+from state.contracts.trigger import TriggerDef
+from tools.packs.path_safety import normalize_relative_content_name, validate_file_identifier
+
+STORY_PACK_ASSET_MIME_BY_EXTENSION: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".ogv": "video/ogg",
+    ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".flac": "audio/flac",
+}
+STORY_PACK_ASSET_MEDIA_TYPE_BY_EXTENSION: dict[str, str] = {
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".webp": "image",
+    ".gif": "gif",
+    ".mp4": "video",
+    ".webm": "video",
+    ".ogv": "video",
+    ".mov": "video",
+    ".mp3": "audio",
+    ".wav": "audio",
+    ".ogg": "audio",
+    ".m4a": "audio",
+    ".flac": "audio",
+}
+ALLOWED_ASSET_EXTENSIONS = frozenset(STORY_PACK_ASSET_MIME_BY_EXTENSION)
+
+
+@dataclass
+class _LoadedStoryPackScenes:
+    """
+    功能：承载已加载场景模型与原始 payload，避免 validate_story_pack 混合解析和校验细节。
+    入参：scenes（dict[str, StoryPackSceneDef]）：按 scene_id 索引的场景模型；
+        payloads（dict[str, Any]）：同一 scene_id 对应的原始 JSON 对象。
+    出参：_LoadedStoryPackScenes。
+    异常：数据类本身不抛异常；字段一致性由 _load_pack_scenes 保证。
+    """
+
+    scenes: dict[str, StoryPackSceneDef]
+    payloads: dict[str, Any]
+
+
+def story_pack_asset_mime_type_for_src(src: str) -> str:
+    """
+    功能：根据 Story Pack asset src 推断稳定 MIME 类型。
+    入参：src（str）：manifest.assets.<id>.src 或 assets/ 下相对路径。
+    出参：str，白名单命中时返回固定 MIME，否则返回 application/octet-stream。
+    异常：不抛异常；未知扩展名由调用方在白名单校验中处理。
+    """
+    return STORY_PACK_ASSET_MIME_BY_EXTENSION.get(
+        Path(src).suffix.lower(),
+        "application/octet-stream",
+    )
+
+
+def story_pack_asset_media_type_for_src(src: str) -> str:
+    """
+    功能：根据 Story Pack asset src 推断 image/gif/video/audio 媒体类型。
+    入参：src（str）：manifest.assets.<id>.src 或 assets/ 下相对路径。
+    出参：str，白名单命中时返回媒体类型，否则返回 image 作为兼容兜底。
+    异常：不抛异常；未知扩展名由调用方在白名单校验中处理。
+    """
+    return STORY_PACK_ASSET_MEDIA_TYPE_BY_EXTENSION.get(Path(src).suffix.lower(), "image")
 
 
 class StoryPackValidationError(ValueError):
@@ -66,16 +142,30 @@ def _validation_to_messages(prefix: str, error: ValidationError) -> list[str]:
     return messages
 
 
-def _compute_pack_hash(manifest_payload: dict[str, Any], scenes_payload: dict[str, Any]) -> str:
+def _compute_pack_hash(
+    manifest_payload: dict[str, Any],
+    scenes_payload: dict[str, Any],
+    quests_payload: dict[str, Any] | None = None,
+    triggers_payload: dict[str, Any] | None = None,
+    assets_payload: dict[str, Any] | None = None,
+) -> str:
     """
-    功能：根据 manifest 与 scenes 的规范化 JSON 内容生成编译摘要 hash。
+    功能：根据 manifest、scenes 与可选资源摘要的规范化 JSON 内容生成编译摘要 hash。
     入参：manifest_payload（dict）：manifest 原始对象；
-        scenes_payload（dict）：按 scene_id 索引的场景对象。
+        scenes_payload（dict）：按 scene_id 索引的场景对象；
+        quests_payload/triggers_payload/assets_payload（dict | None）：任务、触发器和
+        多媒体资源摘要。
     出参：str，sha256 前 16 位，足够用于 A2-Core 会话绑定诊断。
     异常：JSON 序列化异常向上抛出，表示 pack 含不可序列化值。
     """
     canonical = json.dumps(
-        {"manifest": manifest_payload, "scenes": scenes_payload},
+        {
+            "manifest": manifest_payload,
+            "scenes": scenes_payload,
+            "quests": quests_payload or {},
+            "triggers": triggers_payload or {},
+            "assets": assets_payload or {},
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -97,22 +187,125 @@ def _is_relative_to(child: Path, parent: Path) -> bool:
     return True
 
 
-def validate_story_pack(pack_path: str | Path) -> StoryPackBundle:
+def _iter_scene_asset_refs(scene: StoryPackSceneDef) -> list[str]:
     """
-    功能：校验本地 Story Pack 文件夹并返回已编译摘要。
-    入参：pack_path（str | Path）：pack 根目录，必须包含 manifest.json 与 scenes/*.json。
-    出参：StoryPackBundle，包含 manifest、scene 索引和 registry 摘要。
-    异常：StoryPackValidationError，诊断包含缺文件、schema 错误和引用错误。
+    功能：收集单个场景直接或间接引用的多媒体物料 ID。
+    入参：scene（StoryPackSceneDef）：已通过 Pydantic 校验的场景定义。
+    出参：list[str]，可能为空，调用方负责校验是否存在。
+    异常：不抛异常；空引用会被过滤。
     """
-    root = Path(pack_path)
-    diagnostics: list[str] = []
-    if not root.exists() or not root.is_dir():
-        raise StoryPackValidationError([f"pack 目录不存在: {root}"])
+    refs: list[str] = []
+    for asset_id in (scene.background_asset_id, scene.image_asset_id):
+        if asset_id:
+            refs.append(asset_id)
+    for exit_def in scene.exits:
+        if exit_def.asset_id:
+            refs.append(exit_def.asset_id)
+    for interaction in scene.interactables:
+        if interaction.asset_id:
+            refs.append(interaction.asset_id)
+    for visible in [*scene.visible_npcs, *scene.visible_items]:
+        if isinstance(visible, StoryPackVisibleRefDef):
+            for asset_id in (
+                visible.asset_id,
+                visible.portrait_asset_id,
+                visible.icon_asset_id,
+                visible.image_asset_id,
+            ):
+                if asset_id:
+                    refs.append(asset_id)
+    return refs
 
+
+def _validate_pack_assets(
+    root: Path,
+    manifest: StoryPackManifest,
+    scenes: dict[str, StoryPackSceneDef],
+    diagnostics: list[str],
+) -> dict[str, Any]:
+    """
+    功能：校验 manifest.assets 与场景 asset 引用，并返回用于 compiled hash 的媒体摘要。
+    入参：root（Path）：pack 根目录；manifest（StoryPackManifest）：入口定义；
+        scenes（dict[str, StoryPackSceneDef]）：已加载场景；diagnostics（list[str]）：可追加诊断。
+    出参：dict[str, Any]，键为 asset_id，值包含 src 和文件 digest。
+    异常：不抛业务异常；路径或读文件失败会追加 diagnostics。
+    """
+    assets_dir = (root / "assets").resolve()
+    asset_hash_payloads: dict[str, Any] = {}
+    for asset_id, asset in manifest.assets.items():
+        try:
+            validate_file_identifier(asset_id, "asset_id")
+        except ValueError as error:
+            diagnostics.append(str(error))
+            continue
+        try:
+            relative_src = normalize_relative_content_name(asset.src, "assets")
+        except ValueError as error:
+            diagnostics.append(str(error))
+            continue
+        suffix = Path(relative_src).suffix.lower()
+        if suffix not in ALLOWED_ASSET_EXTENSIONS:
+            diagnostics.append(f"asset {asset_id} 扩展名非法: {suffix or '<none>'}")
+            continue
+        inferred_mime_type = story_pack_asset_mime_type_for_src(relative_src)
+        declared_mime_type = str(asset.mime_type or "").strip().lower()
+        if declared_mime_type and declared_mime_type != inferred_mime_type:
+            diagnostics.append(
+                f"asset {asset_id} MIME 不匹配: {declared_mime_type} != {inferred_mime_type}"
+            )
+            continue
+        inferred_media_type = story_pack_asset_media_type_for_src(relative_src)
+        if asset.media_type and asset.media_type != inferred_media_type:
+            diagnostics.append(
+                f"asset {asset_id} media_type 不匹配: {asset.media_type} != {inferred_media_type}"
+            )
+            continue
+        asset_path = (assets_dir / relative_src).resolve()
+        if not _is_relative_to(asset_path, assets_dir):
+            diagnostics.append(f"asset 文件越界: assets/{relative_src}")
+            continue
+        if not asset_path.exists() or not asset_path.is_file():
+            diagnostics.append(f"asset 文件不存在: assets/{relative_src}")
+            continue
+        try:
+            digest = hashlib.sha256(asset_path.read_bytes()).hexdigest()[:16]
+        except OSError as error:
+            diagnostics.append(f"asset {asset_id} 读取失败: {error}")
+            continue
+        asset_hash_payloads[asset_id] = {
+            "src": relative_src,
+            "digest": digest,
+            "kind": asset.kind,
+            "media_type": inferred_media_type,
+            "mime_type": declared_mime_type or inferred_mime_type,
+        }
+        if asset.playback is not None:
+            playback_payload = asset.playback.model_dump(
+                mode="json",
+                exclude_defaults=True,
+                exclude_none=True,
+            )
+            if playback_payload:
+                asset_hash_payloads[asset_id]["playback"] = playback_payload
+
+    declared_asset_ids = set(manifest.assets)
+    for scene in scenes.values():
+        for asset_id in _iter_scene_asset_refs(scene):
+            if asset_id not in declared_asset_ids:
+                diagnostics.append(f"scene {scene.scene_id} 引用未声明 asset: {asset_id}")
+    return asset_hash_payloads
+
+
+def _load_pack_manifest(root: Path) -> tuple[dict[str, Any], StoryPackManifest]:
+    """
+    功能：读取并校验 Story Pack manifest.json。
+    入参：root（Path）：pack 根目录，必须包含 manifest.json。
+    出参：tuple[dict[str, Any], StoryPackManifest]，原始 payload 与 Pydantic 模型。
+    异常：缺文件、读取失败或 schema 错误时抛 StoryPackValidationError。
+    """
     manifest_path = root / "manifest.json"
     if not manifest_path.exists():
         raise StoryPackValidationError([f"缺少 manifest.json: {manifest_path}"])
-
     try:
         manifest_payload = _read_json_object(manifest_path)
         manifest = StoryPackManifest.model_validate(manifest_payload)
@@ -120,11 +313,67 @@ def validate_story_pack(pack_path: str | Path) -> StoryPackBundle:
         raise StoryPackValidationError([f"manifest.json 读取失败: {error}"]) from error
     except ValidationError as error:
         raise StoryPackValidationError(_validation_to_messages("manifest", error)) from error
+    return manifest_payload, manifest
 
-    # 准入边界：pack_id 必须与目录名一致，避免 registry key 与内容身份分裂。
+
+def _validate_manifest_identity(
+    root: Path,
+    manifest: StoryPackManifest,
+    diagnostics: list[str],
+) -> None:
+    """
+    功能：校验 manifest.pack_id 与目录名一致，避免 registry key 与内容身份分裂。
+    入参：root（Path）：pack 根目录；manifest（StoryPackManifest）：入口定义；
+        diagnostics（list[str]）：可追加诊断。
+    出参：None。
+    异常：不抛异常；不一致时追加 diagnostics，交由总入口统一抛出。
+    """
     if manifest.pack_id != root.name:
         diagnostics.append(f"pack_id 与目录名不一致: {manifest.pack_id} != {root.name}")
 
+
+def _load_pack_triggers(
+    root: Path,
+    diagnostics: list[str],
+) -> tuple[set[str], dict[str, TriggerDef]]:
+    """
+    功能：加载 triggers/*.json 并校验触发器 ID 唯一性。
+    入参：root（Path）：pack 根目录；diagnostics（list[str]）：可追加诊断。
+    出参：tuple[set[str], dict[str, TriggerDef]]，触发器 ID 集合与模型索引。
+    异常：不抛业务异常；单个触发器读取或 schema 错误会追加 diagnostics 并继续。
+    """
+    triggers_dir = root / "triggers"
+    trigger_ids: set[str] = set()
+    triggers: dict[str, TriggerDef] = {}
+    if not triggers_dir.exists() or not triggers_dir.is_dir():
+        return trigger_ids, triggers
+
+    for trigger_path in sorted(triggers_dir.glob("*.json")):
+        try:
+            trigger_payload = _read_json_object(trigger_path)
+            trigger_def = TriggerDef.model_validate(trigger_payload)
+        except (OSError, ValueError) as error:
+            diagnostics.append(f"triggers/{trigger_path.name} 读取失败: {error}")
+            continue
+        except ValidationError as error:
+            diagnostics.extend(_validation_to_messages(f"triggers/{trigger_path.name}", error))
+            continue
+        trigger_id = trigger_def.trigger_id
+        if trigger_id in trigger_ids:
+            diagnostics.append(f"触发器 ID 重复: {trigger_id}")
+            continue
+        trigger_ids.add(trigger_id)
+        triggers[trigger_id] = trigger_def
+    return trigger_ids, triggers
+
+
+def _load_pack_scenes(root: Path, diagnostics: list[str]) -> _LoadedStoryPackScenes:
+    """
+    功能：加载 scenes/*.json，校验 scene schema 与 scene_id 唯一性。
+    入参：root（Path）：pack 根目录；diagnostics（list[str]）：可追加诊断。
+    出参：_LoadedStoryPackScenes，包含有效场景模型与原始 payload。
+    异常：缺少 scenes/ 目录时抛 StoryPackValidationError；单文件错误追加 diagnostics。
+    """
     scenes_dir = root / "scenes"
     if not scenes_dir.exists() or not scenes_dir.is_dir():
         raise StoryPackValidationError(["缺少 scenes/ 目录"])
@@ -146,7 +395,25 @@ def validate_story_pack(pack_path: str | Path) -> StoryPackBundle:
             continue
         scenes[scene.scene_id] = scene
         scene_payloads[scene.scene_id] = payload
+    return _LoadedStoryPackScenes(scenes=scenes, payloads=scene_payloads)
 
+
+def _validate_scene_references(
+    *,
+    manifest: StoryPackManifest,
+    scenes: dict[str, StoryPackSceneDef],
+    scene_payloads: dict[str, Any],
+    trigger_ids: set[str],
+    diagnostics: list[str],
+) -> None:
+    """
+    功能：校验场景起点、出口、交互 ID、交互 kind 与触发器引用完整性。
+    入参：manifest（StoryPackManifest）：入口定义；scenes（dict）：场景索引；
+        scene_payloads（dict[str, Any]）：原始场景 JSON；trigger_ids（set[str]）：已加载触发器；
+        diagnostics（list[str]）：可追加诊断。
+    出参：None。
+    异常：不抛异常；所有引用错误追加 diagnostics。
+    """
     if not scenes:
         diagnostics.append("scenes/ 至少需要 1 个有效场景")
     if manifest.start_scene_id not in scenes:
@@ -166,6 +433,43 @@ def validate_story_pack(pack_path: str | Path) -> StoryPackBundle:
                     f"scene {scene.scene_id} 出口指向不存在场景: {exit_def.target_scene_id}"
                 )
 
+    _allowed_interactable_kinds = frozenset(
+        {"observe", "talk", "inspect", "use_item", "attack", "custom"}
+    )
+    for scene_id, raw in scene_payloads.items():
+        raw_interactables = raw.get("interactables")
+        if raw_interactables and isinstance(raw_interactables, list):
+            for interactable in raw_interactables:
+                if (
+                    isinstance(interactable, dict)
+                    and interactable.get("kind") not in _allowed_interactable_kinds
+                ):
+                    interaction_id = interactable.get("interaction_id", "?")
+                    diagnostics.append(
+                        f"场景 {scene_id} interactable {interaction_id} "
+                        f"kind 非法: {interactable.get('kind')}"
+                    )
+
+    for scene_id, raw in scene_payloads.items():
+        raw_triggers = raw.get("triggers")
+        if raw_triggers and isinstance(raw_triggers, list):
+            for trigger_ref in raw_triggers:
+                if isinstance(trigger_ref, str) and trigger_ref not in trigger_ids:
+                    diagnostics.append(f"场景 {scene_id} 引用不存在的触发器: {trigger_ref}")
+
+
+def _validate_lore_files(
+    root: Path,
+    manifest: StoryPackManifest,
+    diagnostics: list[str],
+) -> None:
+    """
+    功能：校验 manifest.lore_files 是否存在且未越出 pack/lore 边界。
+    入参：root（Path）：pack 根目录；manifest（StoryPackManifest）：入口定义；
+        diagnostics（list[str]）：可追加诊断。
+    出参：None。
+    异常：不抛异常；越界或缺文件均追加 diagnostics。
+    """
     root_resolved = root.resolve()
     lore_dir = (root / "lore").resolve()
     for lore_file in manifest.lore_files:
@@ -180,23 +484,157 @@ def validate_story_pack(pack_path: str | Path) -> StoryPackBundle:
         if not lore_path.exists():
             diagnostics.append(f"lore 文件不存在: lore/{lore_file}")
 
-    if diagnostics:
-        raise StoryPackValidationError(diagnostics)
 
-    pack_hash = _compute_pack_hash(manifest_payload, scene_payloads)
+def _load_pack_quests(
+    root: Path,
+    trigger_ids: set[str],
+    diagnostics: list[str],
+) -> dict[str, QuestDef]:
+    """
+    功能：加载 quests/*.json，并校验任务 ID 唯一性和 stage 触发器引用。
+    入参：root（Path）：pack 根目录；trigger_ids（set[str]）：已加载触发器 ID；
+        diagnostics（list[str]）：可追加诊断。
+    出参：dict[str, QuestDef]，按 quest_id 索引的任务模型。
+    异常：不抛业务异常；单个任务读取或 schema 错误追加 diagnostics 并继续。
+    """
+    quests_dir = root / "quests"
+    quests: dict[str, QuestDef] = {}
+    if not quests_dir.exists() or not quests_dir.is_dir():
+        return quests
+
+    for quest_path in sorted(quests_dir.glob("*.json")):
+        try:
+            quest_payload = _read_json_object(quest_path)
+            quest_def = QuestDef.model_validate(quest_payload)
+        except (OSError, ValueError) as error:
+            diagnostics.append(f"quests/{quest_path.name} 读取失败: {error}")
+            continue
+        except ValidationError as error:
+            diagnostics.extend(_validation_to_messages(f"quests/{quest_path.name}", error))
+            continue
+        quest_id = quest_def.quest_id
+        if quest_id in quests:
+            diagnostics.append(f"任务 ID 重复: {quest_id}")
+            continue
+        for stage in quest_def.stages:
+            for trigger_ref in stage.triggers_on_activate:
+                if trigger_ref not in trigger_ids:
+                    diagnostics.append(
+                        f"任务 {quest_id} stage {stage.stage_id} triggers_on_activate "
+                        f"引用不存在的触发器: {trigger_ref}"
+                    )
+            for trigger_ref in stage.triggers_on_complete:
+                if trigger_ref not in trigger_ids:
+                    diagnostics.append(
+                        f"任务 {quest_id} stage {stage.stage_id} triggers_on_complete "
+                        f"引用不存在的触发器: {trigger_ref}"
+                    )
+        quests[quest_id] = quest_def
+    return quests
+
+
+def _build_story_pack_summary(
+    *,
+    manifest: StoryPackManifest,
+    scenes: dict[str, StoryPackSceneDef],
+    quests: dict[str, QuestDef],
+    triggers: dict[str, TriggerDef],
+    manifest_payload: dict[str, Any],
+    scene_payloads: dict[str, Any],
+    asset_hash_payloads: dict[str, Any],
+) -> StoryPackSummary:
+    """
+    功能：根据已校验内容构建 StoryPackSummary 与 compiled_artifact_hash。
+    入参：manifest/scenes/quests/triggers 为已加载模型；
+        manifest_payload/scene_payloads 为原始 JSON；
+        asset_hash_payloads（dict[str, Any]）：媒体文件摘要。
+    出参：StoryPackSummary，可写入 registry 对外摘要。
+    异常：JSON 序列化或 hash 构建异常向上抛出，表示 pack 内容不可规范化。
+    """
+    quest_hash_payloads = {
+        quest_id: quest.model_dump(mode="json")
+        for quest_id, quest in sorted(quests.items(), key=lambda item: item[0])
+    }
+    trigger_hash_payloads = {
+        trigger_id: trigger.model_dump(mode="json")
+        for trigger_id, trigger in sorted(triggers.items(), key=lambda item: item[0])
+    }
+    pack_hash = _compute_pack_hash(
+        manifest_payload,
+        scene_payloads,
+        quest_hash_payloads,
+        trigger_hash_payloads,
+        asset_hash_payloads,
+    )
     interaction_count = sum(len(scene.interactables) for scene in scenes.values())
-    summary = StoryPackSummary(
+    start_scene = scenes[manifest.start_scene_id]
+    return StoryPackSummary(
         pack_id=manifest.pack_id,
         title=manifest.title,
         version=manifest.version,
         scenario_id=manifest.scenario_id,
         start_scene_id=manifest.start_scene_id,
+        start_scene_title=start_scene.display_name,
         compiled_artifact_hash=pack_hash,
+        source_background_hash=manifest.source_background_hash,
         scene_count=len(scenes),
         interaction_count=interaction_count,
+        quest_count=len(quests),
+        trigger_count=len(triggers),
+        asset_count=len(manifest.assets),
         diagnostics=[],
     )
-    return StoryPackBundle(manifest=manifest, scenes=scenes, summary=summary)
+
+
+def validate_story_pack(pack_path: str | Path) -> StoryPackBundle:
+    """
+    功能：校验本地 Story Pack 文件夹并返回已编译摘要。
+    入参：pack_path（str | Path）：pack 根目录，必须包含 manifest.json 与 scenes/*.json。
+    出参：StoryPackBundle，包含 manifest、scene 索引和 registry 摘要。
+    异常：StoryPackValidationError，诊断包含缺文件、schema 错误和引用错误。
+    """
+    root = Path(pack_path)
+    diagnostics: list[str] = []
+    if not root.exists() or not root.is_dir():
+        raise StoryPackValidationError([f"pack 目录不存在: {root}"])
+
+    manifest_payload, manifest = _load_pack_manifest(root)
+    _validate_manifest_identity(root, manifest, diagnostics)
+    trigger_ids, triggers = _load_pack_triggers(root, diagnostics)
+    loaded_scenes = _load_pack_scenes(root, diagnostics)
+    scenes = loaded_scenes.scenes
+    scene_payloads = loaded_scenes.payloads
+    _validate_scene_references(
+        manifest=manifest,
+        scenes=scenes,
+        scene_payloads=scene_payloads,
+        trigger_ids=trigger_ids,
+        diagnostics=diagnostics,
+    )
+    _validate_lore_files(root, manifest, diagnostics)
+
+    asset_hash_payloads = _validate_pack_assets(root, manifest, scenes, diagnostics)
+    quests = _load_pack_quests(root, trigger_ids, diagnostics)
+
+    if diagnostics:
+        raise StoryPackValidationError(diagnostics)
+
+    summary = _build_story_pack_summary(
+        manifest=manifest,
+        scenes=scenes,
+        quests=quests,
+        triggers=triggers,
+        manifest_payload=manifest_payload,
+        scene_payloads=scene_payloads,
+        asset_hash_payloads=asset_hash_payloads,
+    )
+    return StoryPackBundle(
+        manifest=manifest,
+        scenes=scenes,
+        quests=quests,
+        triggers=triggers,
+        summary=summary,
+    )
 
 
 class StoryPackRegistry:

@@ -1,3 +1,7 @@
+"""
+功能：提供会话叙事记忆读取与刷新相关 Flask 路由。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -15,6 +19,7 @@ from web_api.service import (
     now_iso,
     parse_json_body,
     success,
+    sync_session_agent_memory_file,
     validate_request_id,
     validate_session_id,
 )
@@ -118,6 +123,7 @@ def refresh_memory(session_id: str) -> tuple[Any, int]:
             memory_summary=summary,
             now_iso=now_iso(),
         )
+        sync_session_agent_memory_file(context, session_id, summary)
         if turns:
             covered = {
                 "from_session_turn_id": turns[max(0, len(turns) - max_turns)]["session_turn_id"],

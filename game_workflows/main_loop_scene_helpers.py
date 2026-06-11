@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
+from game_workflows.action_text import build_move_action_text
 from game_workflows.affordances import build_scene_interaction_model
 from game_workflows.graph_schema import (
     CharacterState,
@@ -15,6 +16,7 @@ from game_workflows.graph_schema import (
     StatusContextState,
     StatusEffectState,
 )
+from state.contracts.story_pack import StoryPackSceneDef, StoryPackVisibleRefDef
 
 
 def normalize_scene_exits(raw_exits: Any) -> list[SceneExitState]:
@@ -49,6 +51,38 @@ def normalize_scene_exits(raw_exits: Any) -> list[SceneExitState]:
     return exits
 
 
+def _pack_visible_ref_to_snapshot(
+    value: str | StoryPackVisibleRefDef,
+    id_key: str,
+    kind: str,
+) -> dict[str, Any]:
+    """
+    功能：把 Story Pack 可见对象引用转换为 scene_snapshot 可展示对象。
+    入参：value（str | StoryPackVisibleRefDef）：旧字符串 ID 或新对象引用；
+        id_key（str）：输出 ID 字段名，如 entity_id/item_id；kind（str）：对象类别。
+    出参：dict[str, Any]，包含 ID、label/name、description、aliases 和 asset 引用。
+    异常：不抛异常；字符串引用按 ID 降级，复杂引用缺失字段时省略。
+    """
+    if isinstance(value, str):
+        return {id_key: value, "label": value, "kind": kind}
+    payload: dict[str, Any] = {
+        id_key: value.id,
+        "id": value.id,
+        "label": value.label or value.id,
+        "kind": kind,
+        "aliases": list(value.aliases),
+    }
+    if value.label:
+        payload["name"] = value.label
+    if value.description:
+        payload["description"] = value.description
+    for field_name in ("asset_id", "portrait_asset_id", "icon_asset_id", "image_asset_id"):
+        asset_id = getattr(value, field_name)
+        if asset_id:
+            payload[field_name] = asset_id
+    return payload
+
+
 def normalize_dict_list(value: Any) -> list[dict[str, Any]]:
     """
     功能：过滤配置中的对象列表，避免 Web 响应暴露非对象脏数据。
@@ -70,7 +104,7 @@ def _to_int(value: Any, default: int = 0) -> int:
     """
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
@@ -83,7 +117,7 @@ def _to_ratio(value: Any, default: float) -> float:
     """
     try:
         ratio = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         ratio = default
     return max(0.0, min(1.0, ratio))
 
@@ -116,6 +150,42 @@ def parse_state_flags(raw_flags: Any) -> list[str]:
         seen.add(flag)
         flags.append(flag)
     return flags
+
+
+def _pack_exit_conditions_met(
+    conditions: list[str],
+    active_character: CharacterState | None,
+) -> bool:
+    """
+    功能：判断 Story Pack 出口前置条件是否已被当前角色状态标签满足。
+    入参：conditions（list[str]）：出口要求的状态 flag；active_character（CharacterState | None）：
+        当前角色快照，缺失时无法证明条件满足。
+    出参：bool，条件为空或全部命中 state_flags 时返回 True。
+    异常：不抛异常；脏 flag 会被跳过，未知条件按未满足处理。
+    """
+    if not conditions:
+        return True
+    if active_character is None:
+        return False
+    raw_flags = active_character.get("state_flags", [])
+    if not isinstance(raw_flags, list):
+        return False
+    state_flag_set = {str(flag).strip().lower() for flag in raw_flags if isinstance(flag, str)}
+    for condition in conditions:
+        normalized = condition.strip().lower()
+        if normalized and normalized not in state_flag_set:
+            return False
+    return True
+
+
+def _pack_exit_disabled_reason(label: str) -> str:
+    """
+    功能：为未解锁出口生成玩家可读的禁用原因。
+    入参：label（str）：出口展示名。
+    出参：str，中文禁用原因。
+    异常：不抛异常；空 label 时使用通用方向文案。
+    """
+    return f"需要先完成前置线索，才能{build_move_action_text(label)}。"
 
 
 def _read_effect_template(
@@ -312,18 +382,92 @@ def build_scene_snapshot(
     active_character: CharacterState | None,
     recent_memory: str = "",
     use_shadow: bool = False,
+    pack_scene: StoryPackSceneDef | None = None,
 ) -> SceneSnapshot | None:
     """
     功能：构造当前回合场景快照，供 NLU、校验、叙事和 Web 可操作提示共享。
     入参：entity_probes（Any）：实体探针实例；rules（dict[str, Any]）：主循环规则配置；
         active_character（CharacterState | None）：当前角色快照；
         recent_memory（str，默认空）：会话记忆摘要；
-        use_shadow（bool，默认 False）：是否读取 Shadow 世界状态。
+        use_shadow（bool，默认 False）：是否读取 Shadow 世界状态；
+        pack_scene（StoryPackSceneDef | None，默认 None）：当提供时，使用 Story Pack 场景定义
+            填充快照（outputs、名称、摘要、交互器、NPC、物品），合并或替换 DB 来源内容。
     出参：SceneSnapshot | None，角色缺失时返回 None。
     异常：只读数据库异常向上抛出；地点定义缺失时使用配置降级场景，不中断回合。
     """
     if active_character is None:
         return None
+    # 剧本包分支：当提供 pack_scene 时，使用 Story Pack 场景定义构建快照
+    if pack_scene is not None:
+        pack_exits: list[SceneExitState] = []
+        for ext in pack_scene.exits:
+            exit_conditions = list(ext.conditions)
+            exit_enabled = _pack_exit_conditions_met(exit_conditions, active_character)
+            exit_payload: SceneExitState = {
+                "direction": "exit",
+                "location_id": ext.target_scene_id,
+                "label": ext.label,
+                "aliases": ext.aliases,
+                "enabled": exit_enabled,
+            }
+            if exit_conditions:
+                exit_payload["conditions"] = exit_conditions
+            if not exit_enabled:
+                exit_payload["disabled_reason"] = _pack_exit_disabled_reason(ext.label)
+            if ext.asset_id:
+                exit_payload["asset_id"] = ext.asset_id
+            pack_exits.append(exit_payload)
+        pack_npcs: list[dict[str, Any]] = [
+            _pack_visible_ref_to_snapshot(npc_ref, "entity_id", "npc")
+            for npc_ref in pack_scene.visible_npcs
+        ]
+        pack_items: list[dict[str, Any]] = [
+            _pack_visible_ref_to_snapshot(item_ref, "item_id", "item")
+            for item_ref in pack_scene.visible_items
+        ]
+        pack_interactions: list[dict[str, Any]] = []
+        for ia in pack_scene.interactables:
+            interaction_payload: dict[str, Any] = {
+                "interaction_id": ia.interaction_id,
+                "label": ia.label,
+                "kind": ia.kind,
+                "target_ref": ia.target_ref,
+                "aliases": list(ia.aliases),
+                "quick_action": ia.quick_action,
+            }
+            if ia.asset_id:
+                interaction_payload["asset_id"] = ia.asset_id
+            pack_interactions.append(interaction_payload)
+        pack_actions: list[str] = []
+        if pack_exits:
+            pack_actions.append("move")
+        for interaction in pack_interactions:
+            action_kind = str(interaction.get("kind") or "interact")
+            if action_kind not in pack_actions:
+                pack_actions.append(action_kind)
+        if pack_interactions and "interact" not in pack_actions:
+            pack_actions.append("interact")
+        pack_snapshot: dict[str, Any] = {
+            "schema_version": "scene_snapshot.v2",
+            "current_location": {
+                "id": pack_scene.scene_id,
+                "name": pack_scene.display_name,
+                "description": pack_scene.summary,
+                "background_asset_id": pack_scene.background_asset_id,
+                "image_asset_id": pack_scene.image_asset_id,
+            },
+            "exits": pack_exits,
+            "interactables": pack_interactions,
+            "visible_npcs": pack_npcs,
+            "visible_items": pack_items,
+            "active_quests": [],
+            "recent_memory": recent_memory,
+            "available_actions": pack_actions,
+            "suggested_actions": [],
+        }
+        pack_snapshot.update(build_scene_interaction_model(pack_snapshot))
+        return cast(SceneSnapshot, pack_snapshot)
+    # DB/配置降级分支（pack_scene 为 None 时走此路径）
     location_id = active_character.get("location", "unknown")
     location_info = entity_probes.get_location_info(location_id, use_shadow=use_shadow)
     scene_defaults = rules.get("scene_defaults", {})

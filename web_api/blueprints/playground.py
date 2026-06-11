@@ -1,3 +1,7 @@
+"""
+功能：托管正式 React 前端入口与 legacy playground 页面。
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,9 +26,10 @@ def playground_page() -> str:
 
 
 @playground_blueprint.get("/app")
+@playground_blueprint.get("/app/")
 def app_page() -> Response | str:
     """
-    功能：提供 React 前端同源入口，优先返回构建产物，缺失时返回降级引导页。
+    功能：提供 React 前端同源入口，兼容 `/app` 与 `/app/`，优先返回构建产物，缺失时返回降级引导页。
     入参：无。
     出参：Response，`frontend/dist/index.html` 或模板降级页。
     异常：文件读取失败时由 Flask 抛出异常；降级页路径缺失时返回 404。

@@ -1,0 +1,85 @@
+{
+  "scene_id": "red_lantern_lane",
+  "display_name": "赤灯巷",
+  "summary": "窄巷上方挂满赤色灯罩，灯芯却没有火。守灯人莫婶坐在门槛上，把一束湿灯绳绕成结，又拆开，再绕成同一个结。",
+  "exits": [
+    {
+      "target_scene_id": "ferry_landing",
+      "label": "返回鹭潮渡口",
+      "aliases": [
+        "渡口",
+        "码头",
+        "返回",
+        "东"
+      ]
+    },
+    {
+      "target_scene_id": "ledgers_room",
+      "label": "穿过后门去旧账房",
+      "aliases": [
+        "账房",
+        "后门",
+        "账册",
+        "北"
+      ]
+    },
+    {
+      "target_scene_id": "bell_courtyard",
+      "label": "走向静默钟院",
+      "aliases": [
+        "钟院",
+        "潮钟",
+        "静默钟",
+        "西"
+      ],
+      "conditions": [
+        "ledger_second_boat_found"
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "talk_lantern_keeper_mo",
+      "label": "询问守灯人莫婶",
+      "kind": "talk",
+      "target_ref": "lantern_keeper_mo",
+      "aliases": [
+        "莫婶",
+        "守灯人",
+        "灯绳"
+      ]
+    },
+    {
+      "interaction_id": "inspect_lantern_knots",
+      "label": "检查反复打结的灯绳",
+      "kind": "inspect",
+      "target_ref": "lantern_knots",
+      "aliases": [
+        "灯绳",
+        "绳结",
+        "赤灯"
+      ]
+    }
+  ],
+  "visible_npcs": [
+    {
+      "id": "lantern_keeper_mo",
+      "label": "守灯人莫婶",
+      "aliases": [
+        "莫婶",
+        "守灯人"
+      ]
+    }
+  ],
+  "visible_items": [
+    {
+      "id": "lantern_knots",
+      "label": "反复打结的灯绳",
+      "aliases": [
+        "灯绳",
+        "绳结",
+        "赤灯"
+      ]
+    }
+  ]
+}

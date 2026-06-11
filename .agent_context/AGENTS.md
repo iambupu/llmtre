@@ -7,8 +7,8 @@
 
 `.agent_context/` 的当前实现定位是**本地 Agent 运行期上下文工作区**：
 - 规范文件（`AGENTS.md`、`OPS.md`）约束 Agent 的上下文读取、工具调用和错误记录。
-- `MEMORY.md` 保存跨会话长期叙事摘要。
-- 主循环只读加载 `MEMORY.md`，并把有效内容并入 `SceneSnapshot.recent_memory`，供 NLU、GM 和叙事渲染链路使用。
+- `sessions/<session_id>/MEMORY.md` 保存每个游戏会话自己的长期叙事记忆镜像，权威数据来自 SQLite 结构化记忆项。
+- 主循环按当前 `session_id` 只读加载对应 `MEMORY.md`，并把有效内容并入 `SceneSnapshot.recent_memory`，供 NLU、GM 和叙事渲染链路使用。
 - 该目录不是 SQLite 状态库，不保存可由 Pydantic/数据库确定查询的事实。
 
 ## 2. 动态记忆与上下文层级 (Context Tiers)
@@ -23,14 +23,15 @@
   - 当前进行中的首要任务 (`Active_Quest`)。
 
 ### Tier 2: 剧情摘要池 (Memories)
-- **挂载方式**：由 `Evolution Agent` (演化智能体) 定期生成，写入 `.agent_context/MEMORY.md`；运行时由 `agents.agent_context.load_agent_memory()` 只读加载，并在 `MainEventLoop.run()` 中与 Web 会话近期摘要合并。
+- **挂载方式**：有效剧情回合完成后从已确认的回合结果中提取结构化叙事记忆项，并导出到 `.agent_context/sessions/<session_id>/MEMORY.md`；运行时优先从 SQLite 检索该会话的长期记忆上下文，兼容路径才只读加载 `MEMORY.md`。
 - **内容规范**：
   - 以精简的条目记录玩家的重大选择和改变（例如：“玩家在铁匠铺杀死了铁匠，导致整个小镇仇恨度升高”）。
-  - **触发规则**：GM Agent 需在当前场景发生重大流转（如切换地图、完成任务分支）时，调用工具请求生成新的 Narrative Diff。
+  - **触发规则**：`should_write_story_memory=true` 的有效剧情回合才允许写入；写入内容来自 `physics_diff`、`trigger_events`、`quest_updates`、当前场景快照和回合结果，不从 GM 文案反推权威状态。
 - **边界规则**：
-  - `MEMORY.md` 只补充叙事背景，不参与动作合法性、数值判定或状态写入。
+  - 会话级 `MEMORY.md` 只补充叙事背景，不参与动作合法性、数值判定或状态写入。
   - 空章节标题和 HTML 占位注释会被运行时识别为空模板，不会进入 Prompt。
   - Web 会话近期记忆优先于 `.agent_context` 长期记忆，避免长期摘要覆盖当前回合事实。
+  - 不同游戏会话不得共享同一长期记忆文件。
 
 ### Tier 3: 长期结构化事实 (Facts)
 - **挂载方式**：存储于持久化层 (SQLite & Pydantic Schema)。

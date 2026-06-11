@@ -1,6 +1,6 @@
-# TRE A1版本游玩指南
+# TRE A2-Release 游玩指南
 
-本指南面向想直接试玩当前 Web Demo 的玩家。按本文顺序操作，可以完成一次新会话创建、回合输入、场景查看、记忆查看和重启后继续游玩。当前推荐使用 `/app`（React 前端），`/play` 作为 legacy 对照入口保留。
+本指南面向想直接试玩当前 Web Demo 的玩家。按本文顺序操作，可以完成剧本包选择、剧本导入、会话创建、回合输入、场景查看、记忆查看和重启后继续游玩。当前推荐使用 `/app`（React 前端），`/play` 作为 legacy 对照入口保留。
 
 ## 1. 游玩前准备
 
@@ -166,7 +166,7 @@ npm run build
 - 顶部栏：填写角色 ID、会话 ID，执行 `新会话` / `加载` / `重置`，以及 `控制台/调试` 开关。`新会话` / `加载` 只在这里出现。
 - 场景区：展示当前地点标题、出口徽标、可见对象卡片、当前状态提示（不再是原始 JSON 直出）。
 - 回合记录：展示系统/玩家/GM 消息、快捷行动按钮、输出模式（`stream` / `sync`）、输入框与 `发送` / `停止`。
-- 右侧状态区：角色状态、背包/装备、任务、记忆摘要与沙盒控制按钮；角色信息由后端会话返回驱动，未建会话前显示 `--` 占位。
+- 右侧状态区：角色状态、背包/装备、任务、剧本管理、记忆摘要与沙盒控制按钮；角色信息由后端会话返回驱动，未建会话前显示 `--` 占位。
 
 玩家日常游玩主要使用：
 
@@ -183,26 +183,78 @@ npm run build
 ## 4. 第一局推荐流程
 
 1. 确认顶部“角色”为 `player_01`。
-2. 点击 `新会话`。
-3. 等待 GM 开场叙事显示在“回合记录”中。
-4. 阅读“当前场景”，重点看地点描述、出口、可见对象和建议行动。
-5. 点击页面给出的建议行动，或在输入框输入 `观察周围` 后点击 `发送`。
-6. 继续输入 3 到 5 个明确行动，例如：
+2. 在顶部剧本选择中选择已导入 pack，或在未选择 pack 时填写背景文本。
+3. 点击 `新会话`。
+4. 等待 GM 开场叙事显示在“回合记录”中。
+5. 阅读“当前场景”，重点看地点描述、出口、可见对象和建议行动。
+6. 点击页面给出的建议行动，或在输入框输入 `观察雾林边缘` 后点击 `发送`。
+7. 继续输入 3 到 5 个明确行动，例如：
 
 ```text
-观察周围
-检查背包
-前往森林
-攻击地精
-和地精说话
-使用药水
+观察雾林边缘
+沿旧路进入废弃营地
+呼唤巡林人艾拉
+翻看火坑灰烬
+沿石阶前往遗迹门
+询问石门旁的守门学者
 ```
 
-7. 点击记忆区的 `读取` 查看近期记忆文本（由有效回合拼接/分段摘要生成）。
-8. 点击记忆区的 `刷新` 触发后端重算摘要，确认记忆文本更新。
-9. 关闭并重新启动 `uv run python app.py` 后，可把顶部“会话”输入框填回原 `session_id`，点击 `加载` 继续游玩。
+8. 点击记忆区的 `读取` 查看近期记忆文本（由有效回合拼接/分段摘要生成）。
+9. 点击记忆区的 `刷新` 触发后端重算摘要，确认记忆文本更新。
+10. 关闭并重新启动 `uv run python app.py` 后，可把顶部“会话”输入框填回原 `session_id`，点击 `加载` 继续游玩。
 
-## 5. 如何输入行动
+## 5. 剧本包流程
+
+外部示例 demo pack 位于 `examples/story_packs/demo_a2_core`。命令行校验：
+
+```bash
+uv run python -m tools.packs.validate examples/story_packs/demo_a2_core
+```
+
+`/app` 右侧“剧本管理”区提供三个发布期动作：
+
+- `预览`：读取当前选择 pack 的 manifest、summary 和场景摘要。
+- `导入剧本`：把 JSON 草稿提交给 `POST /api/story-packs`，后端落盘并复验。
+- `删除`：删除非官方 pack；官方 `demo_a2_core` 会被保护。
+
+导入 payload 的最小结构：
+
+```json
+{
+  "manifest": {
+    "pack_id": "custom_release_pack",
+    "version": "0.1.0",
+    "title": "自定义发布包",
+    "scenario_id": "default",
+    "start_scene_id": "start",
+    "supported_actions": ["observe", "inspect", "talk", "move"],
+    "lore_files": ["world.md"]
+  },
+  "scenes": {
+    "start": {
+      "scene_id": "start",
+      "display_name": "入口场景",
+      "summary": "玩家进入一个可试玩的自定义起点。",
+      "exits": [],
+      "interactables": [],
+      "visible_npcs": [],
+      "visible_items": []
+    }
+  },
+  "lore": {
+    "world.md": "# 自定义发布包\n\n这里记录世界背景。"
+  }
+}
+```
+
+演示脚本：
+
+```bash
+uv run python examples/demo_playthrough.py
+uv run python examples/demo_playthrough.py --json
+```
+
+## 6. 如何输入行动
 
 当前 NLU 以规则和关键词为主，输入越明确越稳定。
 
@@ -219,7 +271,7 @@ npm run build
 
 建议避免过短或缺目标的输入，例如 `过去`、`看看`、`弄一下`。如果系统认为行动不够明确，会返回澄清问题；按问题补充目标或方向即可。
 
-## 6. 场景、记忆与建议行动
+## 7. 场景、记忆与建议行动
 
 “当前场景”来自后端返回的 `SceneSnapshot`，会随创建会话、加载会话和提交回合刷新。
 
@@ -233,7 +285,7 @@ npm run build
 
 建议行动只是快捷输入，不是唯一可选项；你也可以直接在输入框输入其他明确行动。
 
-## 7. 输出方式（/app）
+## 8. 输出方式（/app）
 
 默认建议使用 `stream`。提交回合后，前端会接收 SSE 事件，GM 文本逐段出现；调试面板可查看 `lastSseEvent` 和状态日志。
 
@@ -245,7 +297,7 @@ npm run build
 - 下方：对应功能区内容。
 - `Trace` 标签页包含统计卡片、事件检索/筛选、时间线列表；当前无事件时显示空态提示。
 
-## 8. 沙盒并入与回滚
+## 9. 沙盒并入与回滚
 
 当前页面直接暴露两个沙盒按钮，用于展示和操作沙盒分支。当前沙盒仍属于显示/实验功能，不要把它理解成正式剧情分支系统。
 
@@ -256,7 +308,7 @@ npm run build
 
 如果不确定当前会话是否处于沙盒分支，保持正常输入行动即可。沙盒控制的正式契约入口是专用接口 `POST /api/sessions/{session_id}/sandbox/commit` 与 `POST /api/sessions/{session_id}/sandbox/discard`；不要把普通 `/turns` 输入中的同名文本动作当作通用保存/撤销能力。
 
-## 9. 重置与继续会话
+## 10. 重置与继续会话
 
 - `重置`：清空当前会话的回合与记忆，默认保留角色信息，并把 `current_turn_id` 重置为 `0`。
 - 如果当前会话处于沙盒模式，重置前还要满足沙盒 owner / 租约条件，否则会返回受控错误。
@@ -264,14 +316,35 @@ npm run build
 
 会话数据保存在 SQLite 中。只要没有删除或重建 `state/core_data/tre_state.db`，重启 Flask 后仍可加载旧会话。
 
-## 10. 角色状态怎么看
+## 11. 角色状态怎么看
 
 - 右侧“角色状态”卡的 HP/MP、状态摘要和状态标签都来自后端 `active_character`。
 - 状态摘要由 SQLite `state_flags_json`、HP/MP 阈值和分层规则 `character_status` 派生；前端只展示，不写入状态。
 - 没有状态效果时显示“状态稳定”；未创建或加载会话前显示 `--`。
 - 调试面板的“状态”页可查看原始 `state_flags/status_effects/status_context`，用于核对后端返回。
 
-## 11. 常见问题
+## 12. 测试与发布验收
+
+A2-Release 目标测试：
+
+```bash
+uv run python -m pytest tests/test_web_api/test_story_packs_a2.py tests/test_tools/test_story_pack_validator_a2.py -q
+uv run python -m tools.packs.validate examples/story_packs/demo_a2_core
+uv run python -m tools.logs.check_runtime_logs --since-minutes 240
+```
+
+前端验收：
+
+```bash
+cd frontend
+npm run typecheck
+npm test
+npm run build
+```
+
+Windows 下 pytest 清理临时目录或 Vitest 启动 esbuild 时可能出现权限噪声；若断言未失败，可换用仓库内 `--basetemp test_runs/<name>` 或非沙箱环境重跑同一命令。
+
+## 13. 常见问题
 
 ### 页面打不开
 

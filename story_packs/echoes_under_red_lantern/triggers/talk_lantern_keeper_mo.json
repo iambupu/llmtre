@@ -1,0 +1,19 @@
+{
+  "trigger_id": "talk_lantern_keeper_mo",
+  "type": "talk",
+  "label": "守灯人的旧誓",
+  "description": "莫婶承认赤灯不是为了引船，而是为了提醒镇民不要忘记旧誓。",
+  "effects": [
+    "narrative",
+    "set_flag"
+  ],
+  "conditions": {
+    "scene_id": "red_lantern_lane",
+    "interaction_id": "talk_lantern_keeper_mo",
+    "flag": "lantern_keeper_knows_oath",
+    "narrative_text": "莫婶说，赤灯不是给船看的，是给镇里活人看的。她把灯绳结成三扣：见证、归还、敲钟。",
+    "memory_text": "守灯人莫婶暗示赤灯和旧誓有关，三扣灯绳代表见证、归还、敲钟。"
+  },
+  "once": true,
+  "priority": 80
+}

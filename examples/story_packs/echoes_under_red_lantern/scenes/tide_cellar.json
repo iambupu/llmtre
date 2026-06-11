@@ -1,0 +1,46 @@
+{
+  "scene_id": "tide_cellar",
+  "display_name": "潮下水窖",
+  "summary": "水窖低得必须弯腰前行。退潮后的水线露出墙上旧字，中央有一面不映人脸的水镜，镜面只映出一艘没有船名的祭船。",
+  "exits": [
+    {
+      "target_scene_id": "bell_courtyard",
+      "label": "回到静默钟院",
+      "aliases": ["钟院", "回去", "返回", "东"]
+    },
+    {
+      "target_scene_id": "dawn_causeway",
+      "label": "沿退潮露出的石梁走向晓桥",
+      "aliases": ["晓桥", "石梁", "退潮", "终点", "西"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_water_mirror",
+      "label": "检查不映人脸的水镜",
+      "kind": "inspect",
+      "target_ref": "water_mirror",
+      "aliases": ["水镜", "镜面", "祭船倒影"]
+    },
+    {
+      "interaction_id": "inspect_salt_lock",
+      "label": "检查盐壳封住的旧锁",
+      "kind": "inspect",
+      "target_ref": "salt_lock",
+      "aliases": ["旧锁", "盐壳", "锁"]
+    }
+  ],
+  "visible_npcs": [],
+  "visible_items": [
+    {
+      "id": "water_mirror",
+      "label": "不映人脸的水镜",
+      "aliases": ["水镜", "镜面", "祭船倒影"]
+    },
+    {
+      "id": "salt_lock",
+      "label": "盐壳封住的旧锁",
+      "aliases": ["旧锁", "盐壳", "铜锁"]
+    }
+  ]
+}

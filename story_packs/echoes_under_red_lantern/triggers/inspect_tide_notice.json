@@ -1,0 +1,26 @@
+{
+  "trigger_id": "inspect_tide_notice",
+  "type": "inspect",
+  "label": "盐霜下的缺字",
+  "description": "潮汐告示露出被人刮去的船名，指向三年前失踪的祭船。",
+  "effects": [
+    "narrative",
+    "grant_item",
+    "update_quest",
+    "set_flag"
+  ],
+  "conditions": {
+    "scene_id": "ferry_landing",
+    "interaction_id": "inspect_tide_notice",
+    "item_id": "salt_stained_notice",
+    "quantity": 1,
+    "quest_id": "recover_the_tide_oath",
+    "quest_status": "active",
+    "target_stage_id": "compare_witnesses",
+    "flag": "notice_scraped_name_found",
+    "narrative_text": "盐霜被擦开后，告示边缘露出一行残字：祭船并非失期，而是被划去了船名。",
+    "memory_text": "潮汐告示显示失踪祭船的船名被人为刮去。"
+  },
+  "once": true,
+  "priority": 90
+}

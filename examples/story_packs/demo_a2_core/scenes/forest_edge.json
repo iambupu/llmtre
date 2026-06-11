@@ -6,12 +6,20 @@
     {
       "target_scene_id": "old_camp",
       "label": "沿旧路进入废弃营地",
-      "aliases": ["北", "旧路", "营地"]
+      "aliases": [
+        "北",
+        "旧路",
+        "营地"
+      ]
     },
     {
       "target_scene_id": "ruins_gate",
       "label": "绕向石制遗迹门",
-      "aliases": ["东", "石门", "遗迹"]
+      "aliases": [
+        "东",
+        "石门",
+        "遗迹"
+      ]
     }
   ],
   "interactables": [
@@ -20,9 +28,14 @@
       "label": "检查被雾水浸湿的路标",
       "kind": "inspect",
       "target_ref": "mist_marker",
-      "aliases": ["路标", "木牌"]
+      "aliases": [
+        "路标",
+        "木牌"
+      ]
     }
   ],
   "visible_npcs": [],
-  "visible_items": ["mist_marker"]
+  "visible_items": [
+    "mist_marker"
+  ]
 }

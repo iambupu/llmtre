@@ -1,3 +1,7 @@
+"""
+功能：覆盖 nlu eval check a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -18,13 +22,25 @@ class _FakeNLUAgent:
     llm_enabled = True
 
     def __init__(self, rules: dict) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.rules = rules
 
     def parse(self, text: str, context: dict) -> dict | None:  # noqa: ARG002
+        """
+        功能：提供 parse 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if text == "观察":
             return {"type": "observe", "parameters": {}}
-        if text == "前往森林":
-            return {"type": "move", "parameters": {"location_id": "forest_edge"}}
+        if text == "前往下一场景":
+            return {"type": "move", "parameters": {"location_id": "next_area"}}
         if text == "无法解析":
             return None
         return {"type": "wait", "parameters": {}}
@@ -66,8 +82,8 @@ def test_eval_context_contains_minimal_scene_snapshot() -> None:
     context = nlu_eval_check._eval_context()  # noqa: SLF001
 
     assert context["id"] == "player_01"
-    assert context["scene_snapshot"]["exits"][0]["location_id"] == "forest_edge"
-    assert context["scene_snapshot"]["visible_npcs"][0]["entity_id"] == "goblin_01"
+    assert context["scene_snapshot"]["exits"][0]["location_id"] == "next_area"
+    assert context["scene_snapshot"]["visible_npcs"][0]["entity_id"] == "npc_contact"
 
 
 def test_nlu_eval_main_prints_success_summary(
@@ -87,9 +103,9 @@ def test_nlu_eval_main_prints_success_summary(
             {"name": "observe", "input": "观察", "expected_type": "observe"},
             {
                 "name": "move",
-                "input": "前往森林",
+                "input": "前往下一场景",
                 "expected_type": "move",
-                "expected_location_id": "forest_edge",
+                "expected_location_id": "next_area",
             },
         ],
     )
@@ -123,7 +139,7 @@ def test_nlu_eval_main_reports_failures_and_exits_one(
             {"name": "type_mismatch", "input": "其他", "expected_type": "observe"},
             {
                 "name": "location_mismatch",
-                "input": "前往森林",
+                "input": "前往下一场景",
                 "expected_type": "move",
                 "expected_location_id": "town",
             },

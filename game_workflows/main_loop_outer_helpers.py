@@ -74,12 +74,16 @@ async def emit_outer_events(loop: Any, state: FlowState) -> dict[str, Any]:
 
     if loop.outer_emit_world_evolution and state.get("should_advance_turn", True):
         active_character: dict[str, Any] = dict(state.get("active_character") or {})
+        # Pack 回合的场景运行态可能与角色 DB location 暂时不同步；外环演化
+        # 应围绕本回合可见场景推进，非 pack 回合继续回退到角色位置。
+        current_scene_id = str(state.get("current_scene_id") or "").strip()
+        location_id = current_scene_id or str(active_character.get("location", "unknown"))
         try:
             await asyncio.wait_for(
                 loop.outer_bridge.emit_world_evolution(
                     WorldEvolutionEvent(
                         time_passed_minutes=loop.outer_world_minutes_per_turn,
-                        location_id=str(active_character.get("location", "unknown")),
+                        location_id=location_id,
                     )
                 ),
                 timeout=loop.outer_emit_timeout_seconds,
@@ -91,7 +95,7 @@ async def emit_outer_events(loop: Any, state: FlowState) -> dict[str, Any]:
                 "world_evolution",
                 WorldEvolutionEvent(
                     time_passed_minutes=loop.outer_world_minutes_per_turn,
-                    location_id=str(active_character.get("location", "unknown")),
+                    location_id=location_id,
                 ).model_dump(),
                 str(error),
             )

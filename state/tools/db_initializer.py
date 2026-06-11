@@ -1,3 +1,7 @@
+"""
+功能：初始化 SQLite 表结构并导入基础种子数据。
+"""
+
 # ruff: noqa: E402,I001
 import json
 import logging
@@ -31,6 +35,7 @@ REGISTRY_PATH = os.path.join(BASE_DIR, "config", "mod_registry.yml")
 
 logger = logging.getLogger("DBInitializer")
 
+
 def deep_merge(
     base: dict[str, Any],
     extension: dict[str, Any],
@@ -61,6 +66,7 @@ def deep_merge(
             merged[key] = value
 
     return merged
+
 
 class DBInitializer:
     """数据库初始化器：负责按优先级合并 MOD 数据并创建表结构"""
@@ -101,7 +107,7 @@ class DBInitializer:
 
     def is_db_initialized(self) -> bool:
         """
-        功能：检查数据库是否已具备可运行的核心 schema 与关键种子数据。
+        功能：检查数据库是否已具备可运行的核心 schema 与技术占位角色。
         入参：无。
         出参：bool，核心表齐全且存在关键种子时返回 True，否则返回 False。
         异常：函数内部捕获 sqlite/IO 异常并降级返回 False，同时记录告警日志。
@@ -138,9 +144,6 @@ class DBInitializer:
                     "SELECT 1 FROM entities_active WHERE entity_id = 'player_01' LIMIT 1"
                 ).fetchone()
                 if player_row is None:
-                    return False
-                item_row = cursor.execute("SELECT 1 FROM items LIMIT 1").fetchone()
-                if item_row is None:
                     return False
                 return True
         except Exception as error:  # noqa: BLE001
@@ -220,8 +223,7 @@ class DBInitializer:
         """)
         # ... (此处省略其余 inventory, world_state, timeline 等表创建，逻辑同前) ...
         # [为了简洁，正式代码中应包含所有建表语句]
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS inventory_active (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_id TEXT,
@@ -229,10 +231,8 @@ class DBInitializer:
                 quantity INTEGER DEFAULT 1,
                 UNIQUE(owner_id, item_id)
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS inventory_shadow (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_id TEXT,
@@ -240,8 +240,7 @@ class DBInitializer:
                 quantity INTEGER DEFAULT 1,
                 UNIQUE(owner_id, item_id)
             )
-            """
-        )
+            """)
         ensure_runtime_tables(cursor)
 
     def _import_merged_data(self, cursor: sqlite3.Cursor) -> None:
@@ -280,7 +279,7 @@ class DBInitializer:
         """
         # A. 加载官方本体基准
         base_path = os.path.join(DATA_DIR, filename)
-        master_data = {} # key: id, value: dict
+        master_data = {}  # key: id, value: dict
 
         if os.path.exists(base_path):
             with open(base_path, encoding="utf-8") as f:
@@ -290,7 +289,7 @@ class DBInitializer:
 
         # B. 按优先级迭代 MOD 进行合并
         for mod in self.mod_registry:
-            mod_data_path = os.path.join(MODS_DIR, mod['mod_id'], "data", filename)
+            mod_data_path = os.path.join(MODS_DIR, mod["mod_id"], "data", filename)
             if not os.path.exists(mod_data_path):
                 continue
 
@@ -342,20 +341,29 @@ class DBInitializer:
         出参：无显式返回值约束（见调用方约定）。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT OR REPLACE INTO items
             (item_id, name, description, item_type, min_strength, min_agility, min_intelligence,
              effects_json, hooks_json, weight, rarity, usage_limit, is_stackable)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            item.item_id, item.name, item.description, item.item_type,
-            item.requirements.min_strength,
-            item.requirements.min_agility,
-            item.requirements.min_intelligence,
-            json.dumps([e.model_dump() for e in item.effects], ensure_ascii=False),
-            json.dumps(item.hooks, ensure_ascii=False),
-            item.weight, item.rarity, item.usage_limit, item.is_stackable
-        ))
+        """,
+            (
+                item.item_id,
+                item.name,
+                item.description,
+                item.item_type,
+                item.requirements.min_strength,
+                item.requirements.min_agility,
+                item.requirements.min_intelligence,
+                json.dumps([e.model_dump() for e in item.effects], ensure_ascii=False),
+                json.dumps(item.hooks, ensure_ascii=False),
+                item.weight,
+                item.rarity,
+                item.usage_limit,
+                item.is_stackable,
+            ),
+        )
 
     def _insert_entity(self, cursor: sqlite3.Cursor, ent: EntityTemplate) -> None:
         """
@@ -364,7 +372,8 @@ class DBInitializer:
         出参：无显式返回值约束（见调用方约定）。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT OR REPLACE INTO entities_active
             (
                 entity_id,
@@ -386,18 +395,27 @@ class DBInitializer:
                 state_flags_json
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            ent.entity_id, ent.name, ent.entity_type, ent.description,
-            ent.base_stats.strength,
-            ent.base_stats.agility,
-            ent.base_stats.intelligence,
-            ent.base_stats.constitution,
-            ent.resources.hp, ent.resources.max_hp, ent.resources.mp, ent.resources.max_mp,
-            json.dumps(ent.traits, ensure_ascii=False),
-            json.dumps(ent.social_relations, ensure_ascii=False),
-            ent.current_location_id, ent.behavior_pattern,
-            json.dumps(ent.state_flags, ensure_ascii=False)
-        ))
+        """,
+            (
+                ent.entity_id,
+                ent.name,
+                ent.entity_type,
+                ent.description,
+                ent.base_stats.strength,
+                ent.base_stats.agility,
+                ent.base_stats.intelligence,
+                ent.base_stats.constitution,
+                ent.resources.hp,
+                ent.resources.max_hp,
+                ent.resources.mp,
+                ent.resources.max_mp,
+                json.dumps(ent.traits, ensure_ascii=False),
+                json.dumps(ent.social_relations, ensure_ascii=False),
+                ent.current_location_id,
+                ent.behavior_pattern,
+                json.dumps(ent.state_flags, ensure_ascii=False),
+            ),
+        )
         cursor.execute("DELETE FROM inventory_active WHERE owner_id = ?", (ent.entity_id,))
         for item_id in ent.default_inventory:
             cursor.execute(
@@ -409,6 +427,7 @@ class DBInitializer:
                 """,
                 (ent.entity_id, item_id),
             )
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

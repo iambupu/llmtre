@@ -1,3 +1,7 @@
+"""
+功能：覆盖 rag builders a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -20,9 +24,21 @@ class _FakeStorageContext:
     """
 
     def __init__(self) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.persist_dir: str | None = None
 
     def persist(self, persist_dir: str) -> None:
+        """
+        功能：提供 persist 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.persist_dir = persist_dir
 
 
@@ -37,6 +53,12 @@ class _FakeVectorStoreIndex:
     last_instance: _FakeVectorStoreIndex | None = None
 
     def __init__(self, nodes: list[Any]) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.nodes = nodes
         self.storage_context = _FakeStorageContext()
         _FakeVectorStoreIndex.last_instance = self
@@ -51,6 +73,12 @@ class _FailingVectorStoreIndex:
     """
 
     def __init__(self, nodes: list[Any]) -> None:  # noqa: ARG002
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("vector failed")
 
 
@@ -67,11 +95,23 @@ class _FakeGraphIndex:
     last_instance: _FakeGraphIndex | None = None
 
     def __init__(self) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.storage_context = _FakeStorageContext()
         _FakeGraphIndex.last_instance = self
 
     @classmethod
     def from_documents(cls, documents: list[Document], **kwargs: Any) -> _FakeGraphIndex:
+        """
+        功能：提供 from documents 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if cls.should_fail:
             raise RuntimeError("graph failed")
         cls.last_kwargs = {"documents": documents, **kwargs}
@@ -87,6 +127,12 @@ class _FakeSchemaExtractor:
     """
 
     def __init__(self, llm: Any, extract_prompt: str) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.llm = llm
         self.extract_prompt = extract_prompt
 

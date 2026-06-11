@@ -1,3 +1,7 @@
+"""
+功能：提供主循环只读访问 RAG 上下文的安全桥接层。
+"""
+
 from __future__ import annotations
 
 import asyncio

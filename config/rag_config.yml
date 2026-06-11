@@ -7,7 +7,7 @@ llm:
   # 原生支持 (自动填充 Base URL) 的 provider 包括: 
   # - deepseek, openrouter, gemini, grok, glm, kimi, openai, qwen, siliconflow, ollama, lmstudio
   provider: "ollama"
-  model: "qwen3:8b"
+  model: "qwen3.5:9b"
   api_key: ""
   
   # base_url 留空时，系统会自动映射以下官方地址:

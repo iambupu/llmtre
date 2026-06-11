@@ -1,7 +1,12 @@
+"""
+功能：实现带钩子、冲突检测和事务封装的中央事件总线。
+"""
+
 import importlib.util
 import logging
 import os
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +17,89 @@ from core.runtime_logging import ensure_runtime_logging
 ensure_runtime_logging()
 logger = logging.getLogger("EventBus")
 STOP_PROPAGATION = "__STOP_PROPAGATION__"
+
+
+def _normalize_write_access(raw_write_access: Any) -> set[str]:
+    """
+    功能：把 MOD 声明的写权限规整为可比较的点分路径集合。
+    入参：raw_write_access（Any）：来自 mod_registry.yml 的 write_access 字段。
+    出参：set[str]，仅包含非空字符串路径；非法项被忽略。
+    异常：不抛异常；异常类型输入按空权限降级，避免注册表脏数据扩大写边界。
+    """
+    values = raw_write_access if isinstance(raw_write_access, list) else []
+    return {item.strip() for item in values if isinstance(item, str) and item.strip()}
+
+
+def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：将钩子返回的 patch 递归合并到候选状态，兼容旧钩子返回完整 state 的写法。
+    入参：base（dict[str, Any]）：候选状态副本；patch（dict[str, Any]）：钩子返回值。
+    出参：dict[str, Any]，返回同一个 base 对象，便于调用方继续做差异比较。
+    异常：不抛业务异常；非 dict 子节点按覆盖处理。
+    """
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge_dict(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _iter_changed_leaf_paths(
+    before: Any,
+    after: Any,
+    prefix: tuple[str, ...] = (),
+) -> list[tuple[str, Any]]:
+    """
+    功能：比较钩子执行前后的状态，只产出发生变化的叶子路径和值。
+    入参：before/after（Any）：变更前后对象；prefix（tuple[str, ...]，默认空）：递归路径。
+    出参：list[tuple[str, Any]]，每项为点分路径与 after 中的新值。
+    异常：不抛异常；无法继续递归的值按叶子差异处理。
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        changed: list[tuple[str, Any]] = []
+        for key in sorted(set(before.keys()).union(after.keys())):
+            changed.extend(
+                _iter_changed_leaf_paths(
+                    before.get(key),
+                    after.get(key),
+                    (*prefix, str(key)),
+                )
+            )
+        return changed
+    if before != after and prefix:
+        return [(".".join(prefix), after)]
+    return []
+
+
+def _set_path_value(target: dict[str, Any], path: str, value: Any) -> None:
+    """
+    功能：按点分路径把授权变更写回主状态。
+    入参：target（dict[str, Any]）：主状态；path（str）：点分路径；value（Any）：新值。
+    出参：None。
+    异常：路径中间节点不是 dict 时会被替换为 dict，这是授权 patch 的明确覆盖语义。
+    """
+    parts = [part for part in path.split(".") if part]
+    if not parts:
+        return
+    cursor: dict[str, Any] = target
+    for part in parts[:-1]:
+        next_value = cursor.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            cursor[part] = next_value
+        cursor = next_value
+    cursor[parts[-1]] = value
+
+
+def _is_path_allowed(path: str, allowed_paths: set[str]) -> bool:
+    """
+    功能：判断某个实际变更路径是否被 write_access 授权。
+    入参：path（str）：实际变更的点分路径；allowed_paths（set[str]）：声明授权路径集合。
+    出参：bool，精确命中或处于授权父路径下时返回 True。
+    异常：不抛异常；空授权集合一律返回 False。
+    """
+    return any(path == allowed or path.startswith(f"{allowed}.") for allowed in allowed_paths)
 
 
 @dataclass
@@ -82,7 +170,7 @@ class EventBus:
         """
         功能：同步触发一个事件并执行钩子链，同时记录钩子调度证据。
         入参：event_name（str）：事件名；state（dict[str, Any]）：事件上下文快照。
-        出参：dict[str, Any]，执行钩子后的上下文状态；无钩子时原样返回 state。
+        出参：dict[str, Any]，执行钩子后的上下文状态；仅合并 write_access 授权路径。
         异常：钩子脚本加载异常在 `_execute_hook_script` 内部捕获并降级为 None；
             其他同步执行异常按 Python 默认行为向上抛出。
         """
@@ -96,16 +184,16 @@ class EventBus:
         for hook_cfg in hooks:
             mod_id = hook_cfg["mod_id"]
             func_name = hook_cfg["hook_func_name"]
-            write_access = hook_cfg.get("write_access", [])
+            write_access = _normalize_write_access(hook_cfg.get("write_access", []))
             logger.info(
                 "开始执行事件钩子: event=%s mod=%s hook=%s write_access=%s",
                 event_name,
                 mod_id,
                 func_name,
-                write_access,
+                sorted(write_access),
             )
 
-            conflict_paths = context.locked_paths.intersection(set(write_access))
+            conflict_paths = context.locked_paths.intersection(write_access)
             if conflict_paths:
                 if hook_cfg["strategy"] == "strict_override":
                     logger.warning(
@@ -122,21 +210,60 @@ class EventBus:
                     conflict_paths,
                 )
 
-            result = self._execute_hook_script(mod_id, func_name, context)
-            if result == STOP_PROPAGATION:
-                logger.info("MOD [%s] 触发 STOP_PROPAGATION，终止后续钩子链。", mod_id)
-                break
+            # 权限边界：钩子只能看到私有深拷贝，避免未授权的嵌套原地修改穿透主状态。
+            hook_context = HookContext(
+                event_name=event_name,
+                state=deepcopy(context.state),
+                metadata=dict(context.metadata),
+                locked_paths=set(context.locked_paths),
+            )
+            result = self._execute_hook_script(mod_id, func_name, hook_context)
+            candidate_state = deepcopy(hook_context.state)
 
             if isinstance(result, dict):
-                context.state.update(result)
-                context.locked_paths.update(write_access)
+                # 兼容两类旧钩子：返回完整 state，或只返回局部 patch。
+                candidate_state = _deep_merge_dict(candidate_state, result)
+            changed_paths = _iter_changed_leaf_paths(context.state, candidate_state)
+            allowed_changes = [
+                (path, value)
+                for path, value in changed_paths
+                if _is_path_allowed(path, write_access)
+            ]
+            rejected_paths = [
+                path for path, _value in changed_paths if not _is_path_allowed(path, write_access)
+            ]
+            for path, value in allowed_changes:
+                _set_path_value(context.state, path, value)
+            if allowed_changes:
+                applied_paths = {path for path, _value in allowed_changes}
+                context.locked_paths.update(applied_paths)
                 logger.info(
-                    "事件钩子执行完成并合并结果: event=%s mod=%s hook=%s result_keys=%s",
+                    "事件钩子执行完成并合并授权结果: event=%s mod=%s hook=%s applied_paths=%s",
                     event_name,
                     mod_id,
                     func_name,
-                    sorted(result.keys()),
+                    sorted(applied_paths),
                 )
+            if rejected_paths:
+                logger.warning(
+                    "事件钩子存在未授权写入，已拒绝合并: event=%s mod=%s hook=%s rejected_paths=%s",
+                    event_name,
+                    mod_id,
+                    func_name,
+                    sorted(rejected_paths),
+                )
+
+            if result == STOP_PROPAGATION:
+                logger.info("MOD [%s] 触发 STOP_PROPAGATION，终止后续钩子链。", mod_id)
+                break
+            if isinstance(result, dict):
+                if not allowed_changes and not rejected_paths:
+                    logger.info(
+                        "事件钩子执行完成但未产生实际状态差异: event=%s mod=%s hook=%s",
+                        event_name,
+                        mod_id,
+                        func_name,
+                    )
             else:
                 logger.info(
                     "事件钩子执行完成且无状态变更: event=%s mod=%s hook=%s result_type=%s",

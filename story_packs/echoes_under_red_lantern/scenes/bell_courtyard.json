@@ -1,0 +1,84 @@
+{
+  "scene_id": "bell_courtyard",
+  "display_name": "静默钟院",
+  "summary": "钟院铺着黑湿的碎瓦。潮钟悬在木架下，钟舌被红线缠住，像有人害怕它再次发声。石匠阿砺靠墙坐着，袖口沾着新鲜石粉。",
+  "exits": [
+    {
+      "target_scene_id": "red_lantern_lane",
+      "label": "返回赤灯巷",
+      "aliases": [
+        "赤灯巷",
+        "巷子",
+        "返回",
+        "东"
+      ]
+    },
+    {
+      "target_scene_id": "tide_cellar",
+      "label": "沿钟后石阶进入潮下水窖",
+      "aliases": [
+        "水窖",
+        "石阶",
+        "潮下",
+        "地下",
+        "西"
+      ],
+      "conditions": [
+        "silent_bell_unsealed"
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_silent_bell",
+      "label": "检查静默潮钟",
+      "kind": "inspect",
+      "target_ref": "silent_bell",
+      "aliases": [
+        "潮钟",
+        "钟",
+        "红线",
+        "钟舌"
+      ]
+    },
+    {
+      "interaction_id": "talk_stone_mender_li",
+      "label": "询问石匠阿砺",
+      "kind": "talk",
+      "target_ref": "stone_mender_li",
+      "aliases": [
+        "阿砺",
+        "石匠",
+        "石粉"
+      ]
+    }
+  ],
+  "visible_npcs": [
+    {
+      "id": "stone_mender_li",
+      "label": "石匠阿砺",
+      "aliases": [
+        "阿砺",
+        "石匠"
+      ]
+    }
+  ],
+  "visible_items": [
+    {
+      "id": "silent_bell",
+      "label": "静默潮钟",
+      "aliases": [
+        "潮钟",
+        "钟舌"
+      ]
+    },
+    {
+      "id": "red_thread",
+      "label": "缠住钟舌的红线",
+      "aliases": [
+        "红线",
+        "断线"
+      ]
+    }
+  ]
+}

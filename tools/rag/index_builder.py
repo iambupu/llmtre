@@ -1,3 +1,7 @@
+"""
+功能：构建和刷新 RAG 向量与图谱索引。
+"""
+
 import json
 import logging
 import os
@@ -28,8 +32,10 @@ INDEX_DIR = os.path.join(BASE_DIR, "knowledge_base", "indices")
 
 logger = logging.getLogger("RAGManager.Builder")
 
+
 class MinerUDirectoryReader:
     """专用于解析 MinerU 导出的标准目录结构"""
+
     def load_data(self, dir_path: str) -> list[Document]:
         """
         功能：加载配置或数据资源。
@@ -46,7 +52,7 @@ class MinerUDirectoryReader:
         with open(main_md, encoding="utf-8") as f:
             content = f.read()
 
-        img_paths = re.findall(r'!\[.*?\]\((.*?)\)', content)
+        img_paths = re.findall(r"!\[.*?\]\((.*?)\)", content)
         abs_img_paths = [str((dir_p / p).resolve()) for p in img_paths if (dir_p / p).exists()]
 
         metadata = {
@@ -68,8 +74,10 @@ class MinerUDirectoryReader:
 
         return [Document(text=content, metadata=metadata)]
 
+
 class RulebookMetadataExtractor(BaseExtractor):
     """LLM 自动特征打分器"""
+
     llm: Any = Field(description="LLM instance")
     scoring_prompt: str = Field(description="Scoring prompt template")
 
@@ -92,6 +100,7 @@ class RulebookMetadataExtractor(BaseExtractor):
             except Exception:
                 metadata_list.append({"lore_importance_score": 5, "lore_tags": ["error"]})
         return metadata_list
+
 
 class IndexBuilder:
     """核心构建指挥官：协调数据加载、切片以及 Vector/Graph 索引的构建"""
@@ -124,6 +133,7 @@ class IndexBuilder:
         key = self.config.get("llama_cloud_api_key", "")
         if key and "YOUR_LLAMA_CLOUD" not in key:
             from llama_parse import LlamaParse
+
             extractors[".pdf"] = LlamaParse(api_key=key, result_type="markdown")
         else:
             extractors[".pdf"] = PDFReader()
@@ -205,10 +215,12 @@ class IndexBuilder:
                     ).load_data()
 
                 for d in docs:
-                    d.metadata.update({
-                        "rag_group_name": group_name,
-                        "rag_custom_tags": ",".join(g.get("tags", []))
-                    })
+                    d.metadata.update(
+                        {
+                            "rag_group_name": group_name,
+                            "rag_custom_tags": ",".join(g.get("tags", [])),
+                        }
+                    )
                 group_docs.extend(docs)
 
             all_vector_docs.extend(group_docs)

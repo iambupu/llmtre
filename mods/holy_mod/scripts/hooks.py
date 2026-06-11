@@ -1,3 +1,7 @@
+"""
+功能：提供 holy_mod 的动态脚本钩子示例。
+"""
+
 from typing import Any
 
 

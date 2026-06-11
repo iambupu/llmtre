@@ -21,8 +21,15 @@
       "kind": "inspect",
       "target_ref": "moon_seal",
       "aliases": ["月相", "符号", "石门"]
+    },
+    {
+      "interaction_id": "talk_stone_keeper_maren",
+      "label": "询问石门旁的守门学者",
+      "kind": "talk",
+      "target_ref": "stone_keeper_maren",
+      "aliases": ["玛伦", "守门学者", "学者"]
     }
   ],
-  "visible_npcs": [],
+  "visible_npcs": ["stone_keeper_maren"],
   "visible_items": ["moon_seal"]
 }

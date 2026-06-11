@@ -61,6 +61,40 @@ def build_write_plan(loop: Any, state: Mapping[str, Any]) -> list[dict[str, Any]
             }
         )
 
+    granted_items = diff.get("granted_items", [])
+    if isinstance(granted_items, list):
+        for item in granted_items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("item_id")
+            if not isinstance(item_id, str) or not item_id:
+                continue
+            write_plan.append(
+                {
+                    "type": "grant_item",
+                    "owner_id": str(item.get("owner_id") or entity_id),
+                    "item_id": item_id,
+                    "quantity": int(item.get("quantity", 1)),
+                    "use_shadow": is_sandbox,
+                }
+            )
+    entity_diffs = diff.get("entity_diffs", [])
+    if isinstance(entity_diffs, list):
+        for item in entity_diffs:
+            if not isinstance(item, dict):
+                continue
+            entity_diff = item.get("diff")
+            entity_id = item.get("entity_id")
+            if not isinstance(entity_id, str) or not isinstance(entity_diff, dict):
+                continue
+            write_plan.append(
+                {
+                    "type": "apply_diff",
+                    "entity_id": entity_id,
+                    "diff": entity_diff,
+                    "use_shadow": is_sandbox,
+                }
+            )
     target_id = action.get("target_id")
     target_hp_delta = diff.get("target_hp_delta")
     if target_id and isinstance(target_hp_delta, int):
@@ -112,6 +146,16 @@ def execute_write_op(loop: Any, op: dict[str, Any], conn: Any | None = None) -> 
             loop.db_updater.apply_diff(
                 entity_id=str(op.get("entity_id", "")),
                 diff=dict(op.get("diff", {})),
+                use_shadow=bool(op.get("use_shadow", False)),
+                conn=conn,
+            )
+        )
+    if op_type == "grant_item":
+        return bool(
+            loop.db_updater.grant_item(
+                owner_id=str(op.get("owner_id", "")),
+                item_id=str(op.get("item_id", "")),
+                quantity=int(op.get("quantity", 1)),
                 use_shadow=bool(op.get("use_shadow", False)),
                 conn=conn,
             )

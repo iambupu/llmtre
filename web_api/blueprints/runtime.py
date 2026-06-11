@@ -1,9 +1,14 @@
+"""
+功能：提供运行时维护操作相关 Flask 路由。
+"""
+
 from __future__ import annotations
 
 from typing import Any
 
 from flask import Blueprint
 
+from agents.agent_context import initialize_session_agent_memory
 from web_api.service import (
     error,
     get_runtime_context,
@@ -17,6 +22,24 @@ from web_api.service import (
 )
 
 runtime_blueprint = Blueprint("runtime", __name__, url_prefix="/api/sessions/<session_id>")
+
+
+def _resolve_session_start_scene_id(context: Any, session: dict[str, Any]) -> str | None:
+    """
+    功能：根据会话绑定的 Story Pack 解析重置时应写入的起始场景。
+    入参：context（Any）：API 运行时上下文；session（dict[str, Any]）：当前会话快照。
+    出参：str | None，命中 pack 时返回 manifest.start_scene_id；
+        无 pack 或 registry 缺失时返回 None。
+    异常：不抛异常；registry 缺包或字段缺失时按 None 降级，保持 legacy 会话 reset 兼容。
+    """
+    pack_id = str(session.get("pack_id") or "").strip()
+    registry = getattr(context, "story_pack_registry", None)
+    if not pack_id or registry is None:
+        return None
+    bundle = registry.get(pack_id)
+    if bundle is None:
+        return None
+    return str(bundle.summary.start_scene_id or "").strip() or None
 
 
 @runtime_blueprint.post("/reset")
@@ -85,14 +108,25 @@ def reset_session(session_id: str) -> tuple[Any, int]:
             session_id=session_id,
             keep_character=keep_character,
             now_iso=now_iso(),
+            initial_location_id=_resolve_session_start_scene_id(context, fresh_session),
         )
         if not ok:
             logger.warning("reset_session 清理失败: session_id=%s", session_id)
             return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
+        reset_session_snapshot = get_session(session_id) or fresh_session
+        initialize_session_agent_memory(
+            session_id=session_id,
+            context_dir=context.agent_context_dir,
+        )
         payload = {
             "session_id": session["session_id"],
             "reset": True,
             "current_session_turn_id": 0,
+            "character_id": reset_session_snapshot["character_id"],
+            "runtime_character_id": reset_session_snapshot.get(
+                "runtime_character_id",
+                reset_session_snapshot["character_id"],
+            ),
         }
         context.session_store.save_idempotent_response(
             scope="reset_session",

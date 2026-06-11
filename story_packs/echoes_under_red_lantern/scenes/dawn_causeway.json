@@ -1,0 +1,51 @@
+{
+  "scene_id": "dawn_causeway",
+  "display_name": "晓桥",
+  "summary": "石梁尽头是一座低矮晓桥。第一缕天光落在桥面，赤灯的倒影逐盏熄灭，远处潮钟终于响了一下。",
+  "exits": [
+    {
+      "target_scene_id": "ferry_landing",
+      "label": "带着清晨返回鹭潮渡口",
+      "aliases": [
+        "渡口",
+        "返回",
+        "码头",
+        "东"
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_dawn_bridge",
+      "label": "观察清晨的桥面",
+      "kind": "inspect",
+      "target_ref": "dawn_bridge",
+      "aliases": [
+        "晓桥",
+        "桥面",
+        "清晨",
+        "潮钟"
+      ]
+    }
+  ],
+  "visible_npcs": [],
+  "visible_items": [
+    {
+      "id": "dawn_bridge",
+      "label": "清晨的晓桥",
+      "aliases": [
+        "晓桥",
+        "桥面",
+        "清晨"
+      ]
+    },
+    {
+      "id": "fading_red_lights",
+      "label": "逐盏熄灭的赤灯倒影",
+      "aliases": [
+        "赤灯倒影",
+        "熄灭的灯"
+      ]
+    }
+  ]
+}

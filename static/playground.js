@@ -1033,6 +1033,12 @@ function bindTabs() {
  * 异常：事件处理异常在内部捕获并写入状态日志，不向外抛出。
  */
 function bindActions() {
+    /**
+     * 功能：把异步按钮处理函数包装为带 busy 状态和错误日志的事件回调。
+     * 入参：fn（Function）：实际业务处理函数；busyMessage（string）：执行期间展示的状态文案。
+     * 出参：Function，供 addEventListener 绑定的异步回调。
+     * 异常：内部捕获处理函数异常并写入状态日志，不继续向浏览器事件循环抛出。
+     */
     const wrap = (fn, busyMessage = "处理中") => async () => {
         try {
             await withBusy(busyMessage, fn);

@@ -1,3 +1,7 @@
+"""
+功能：覆盖 nlu schema boundaries a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from agents.nlu_schema import normalize_action_candidate

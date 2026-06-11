@@ -1,20 +1,27 @@
+"""
+功能：提供普通回合与 SSE 流式回合的 Flask 路由。
+"""
+
 from __future__ import annotations
 
 import json
 import queue
 import threading
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Any, cast
 
-from flask import Blueprint, Response, current_app, request, stream_with_context
+from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 from pydantic import ValidationError
 
 from state.contracts.turn import TurnResult
+from web_api.narrative_memory import build_narrative_memory_items
 from web_api.service import (
     DEFAULT_MEMORY_TURNS,
     MAX_MEMORY_TURNS,
     MIN_MEMORY_TURNS,
     TurnExecutionError,
+    _merge_trigger_narrative,
     build_memory,
     ensure_character_available,
     error,
@@ -27,12 +34,35 @@ from web_api.service import (
     parse_json_body,
     run_turn,
     success,
+    sync_session_agent_memory_file,
     validate_character_id,
     validate_request_id,
     validate_session_id,
 )
+from web_api.session_store import (
+    IDEMPOTENCY_STATUS_ERROR,
+    IDEMPOTENCY_STATUS_KEY,
+    IDEMPOTENCY_STATUS_PENDING,
+)
 
 turns_blueprint = Blueprint("turns", __name__, url_prefix="/api/sessions/<session_id>/turns")
+
+
+@dataclass
+class _TurnExecutionPreparation:
+    """
+    功能：描述会话锁内回合执行前置准备结果，统一普通与 SSE 路由的事务边界。
+    入参：由 _prepare_turn_execution_under_lock 构造；字段分别表示会话、幂等缓存、
+        前置错误、沙盒锁状态与最终运行角色 ID。
+    出参：_TurnExecutionPreparation，供调用方按 HTTP 或 SSE 协议解释。
+    异常：数据类本身不抛异常；字段一致性由构造 helper 保证。
+    """
+
+    session: dict[str, Any] | None
+    runtime_character_id: str
+    idempotent_response: dict[str, Any] | None = None
+    error_response: tuple[Any, int] | None = None
+    acquired_sandbox_lock: bool = False
 
 
 def _validate_turn_result_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
@@ -113,15 +143,17 @@ def _normalize_turn_trace(payload: dict[str, Any]) -> dict[str, Any]:
                 "status": "ok" if bool(str(payload.get("final_response", ""))) else "failed",
                 "at": now_iso(),
                 "detail": {
-                    "quick_actions_count": len(quick_actions)
-                    if isinstance(quick_actions, list)
-                    else 0,
-                    "quick_action_candidates_count": len(quick_action_candidates)
-                    if isinstance(quick_action_candidates, list)
-                    else 0,
-                    "status_effects_count": len(status_effects)
-                    if isinstance(status_effects, list)
-                    else 0,
+                    "quick_actions_count": (
+                        len(quick_actions) if isinstance(quick_actions, list) else 0
+                    ),
+                    "quick_action_candidates_count": (
+                        len(quick_action_candidates)
+                        if isinstance(quick_action_candidates, list)
+                        else 0
+                    ),
+                    "status_effects_count": (
+                        len(status_effects) if isinstance(status_effects, list) else 0
+                    ),
                     "status_summary": str(character.get("status_summary", "")),
                 },
             }
@@ -216,6 +248,158 @@ def _build_worker_fallback_error_payload(
     }
 
 
+def _build_api_error_body(
+    code: str,
+    message: str,
+    trace_id: str,
+    trace: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    功能：构造可缓存的 API 错误响应体，供 post-run 幂等失败重放。
+    入参：code/message/trace_id（str）：错误码、用户可见消息与追踪号；
+        trace（dict[str, Any] | None，默认 None）：可选 TurnTrace。
+    出参：dict[str, Any]，与 `error()` 返回体同构的 JSON 对象。
+    异常：不抛异常；trace 非 dict 时不写入响应体。
+    """
+    body: dict[str, Any] = {
+        "ok": False,
+        "trace_id": trace_id,
+        "error": {"code": code, "message": message},
+    }
+    if isinstance(trace, dict):
+        body["trace"] = trace
+    return body
+
+
+def _error_body_to_sse_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：把普通 API 错误响应体转换为 SSE error 事件 payload。
+    入参：body（dict[str, Any]）：缓存的 API 错误响应体。
+    出参：dict[str, Any]，至少包含 code/message，可选 trace_id/trace。
+    异常：不抛异常；字段缺失时按 INTERNAL_ERROR 降级。
+    """
+    error_obj = body.get("error")
+    error_payload = error_obj if isinstance(error_obj, dict) else {}
+    payload: dict[str, Any] = {
+        "code": str(error_payload.get("code") or "INTERNAL_ERROR"),
+        "message": str(error_payload.get("message") or "回合执行失败"),
+    }
+    if isinstance(body.get("trace_id"), str):
+        payload["trace_id"] = body["trace_id"]
+    if isinstance(body.get("trace"), dict):
+        payload["trace"] = body["trace"]
+    return payload
+
+
+def _cached_idempotent_http_response(cached: dict[str, Any]) -> tuple[Any, int]:
+    """
+    功能：把幂等缓存解释为普通 HTTP 响应，区分成功、pending 与 post-run 错误。
+    入参：cached（dict[str, Any]）：`WebSessionStore.reserve_idempotent_request` 返回的缓存对象。
+    出参：tuple[Any, int]，可直接作为 Flask 路由返回值。
+    异常：不抛业务异常；缓存结构异常时按 pending 冲突响应降级，避免误包装为成功。
+    """
+    status = cached.get(IDEMPOTENCY_STATUS_KEY)
+    if status == IDEMPOTENCY_STATUS_ERROR:
+        body = cached.get("body")
+        response_body = (
+            body
+            if isinstance(body, dict)
+            else _build_api_error_body(
+                code="INTERNAL_ERROR",
+                message="回合执行失败",
+                trace_id=new_trace_id(),
+            )
+        )
+        raw_status_code = cached.get("status_code")
+        status_code = raw_status_code if isinstance(raw_status_code, int) else 500
+        return jsonify(response_body), status_code
+    if status == IDEMPOTENCY_STATUS_PENDING:
+        return error("REQUEST_IN_PROGRESS", "同一 request_id 的回合仍在处理，请稍后重试", 409)
+    return success(cached)
+
+
+def _cached_idempotent_sse_event(cached: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """
+    功能：把幂等缓存解释为 SSE 事件，确保错误重放不会伪装成 done。
+    入参：cached（dict[str, Any]）：幂等缓存对象。
+    出参：tuple[str, dict[str, Any]]，事件名与事件 payload。
+    异常：不抛业务异常；异常缓存结构按 REQUEST_IN_PROGRESS 降级。
+    """
+    status = cached.get(IDEMPOTENCY_STATUS_KEY)
+    if status == IDEMPOTENCY_STATUS_ERROR:
+        body = cached.get("body")
+        response_body = (
+            body
+            if isinstance(body, dict)
+            else _build_api_error_body(
+                code="INTERNAL_ERROR",
+                message="回合执行失败",
+                trace_id=new_trace_id(),
+            )
+        )
+        return "error", _error_body_to_sse_payload(response_body)
+    if status == IDEMPOTENCY_STATUS_PENDING:
+        return (
+            "error",
+            {
+                "code": "REQUEST_IN_PROGRESS",
+                "message": "同一 request_id 的回合仍在处理，请稍后重试",
+            },
+        )
+    return "done", cached
+
+
+def _cache_post_run_error_response(
+    context: Any,
+    session_id: str,
+    request_id: str,
+    response_body: dict[str, Any],
+    status_code: int,
+) -> None:
+    """
+    功能：缓存 post-run 错误响应，阻止同一 request_id 重试时再次执行主循环。
+    入参：context（Any）：运行时上下文；session_id/request_id（str）：幂等键；
+        response_body（dict[str, Any]）：错误响应体；status_code（int）：HTTP 状态码。
+    出参：None。
+    异常：缓存写入失败时内部记录异常并降级，不覆盖原始 post-run 错误响应。
+    """
+    try:
+        context.session_store.save_idempotent_error_response(
+            scope="create_turn",
+            session_id=session_id,
+            request_id=request_id,
+            response_body=response_body,
+            status_code=status_code,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "post-run 错误响应缓存失败: route=create_turn session_id=%s request_id=%s",
+            session_id,
+            request_id,
+        )
+
+
+def _clear_pending_idempotent_request(context: Any, session_id: str, request_id: str) -> None:
+    """
+    功能：清理由本次请求创建但尚未完成的幂等 pending 占位。
+    入参：context（Any）：运行时上下文；session_id/request_id（str）：幂等键。
+    出参：None。
+    异常：清理失败时内部记录异常并降级，避免覆盖主业务错误。
+    """
+    try:
+        context.session_store.clear_pending_idempotent_request(
+            scope="create_turn",
+            session_id=session_id,
+            request_id=request_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "pending 幂等占位清理失败: route=create_turn session_id=%s request_id=%s",
+            session_id,
+            request_id,
+        )
+
+
 def _build_turn_response_payload(
     payload: dict[str, Any],
     session_id: str,
@@ -231,6 +415,11 @@ def _build_turn_response_payload(
     出参：dict[str, Any]，已通过 TurnResult 契约校验的响应体。
     异常：字段缺失或类型非法时抛 ValidationError，交由上层统一转错误响应。
     """
+    trigger_events = payload.get("trigger_events", [])
+    final_response = _merge_trigger_narrative(
+        str(payload["final_response"]),
+        trigger_events,
+    )
     response_payload = {
         "session_id": session_id,
         "session_turn_id": session_turn_id,
@@ -240,7 +429,7 @@ def _build_turn_response_payload(
         "is_valid": payload["is_valid"],
         "action_intent": payload["action_intent"],
         "physics_diff": payload["physics_diff"],
-        "final_response": payload["final_response"],
+        "final_response": final_response,
         "quick_actions": payload["quick_actions"],
         "quick_action_candidates": payload.get("quick_action_candidates", []),
         "quick_action_groups": payload.get("quick_action_groups", {"current": [], "nearby": []}),
@@ -261,6 +450,9 @@ def _build_turn_response_payload(
         "should_write_story_memory": payload["should_write_story_memory"],
         "debug_trace": payload["debug_trace"],
         "errors": payload["errors"],
+        "trigger_events": trigger_events,
+        "quest_updates": payload.get("quest_updates", []),
+        "pack_runtime_errors": payload.get("pack_runtime_errors", []),
     }
     response_payload["trace"] = _normalize_turn_trace(response_payload)
     _append_trace_stage(
@@ -272,6 +464,22 @@ def _build_turn_response_payload(
     if isinstance(response_payload.get("trace"), dict):
         response_payload["trace"]["session_turn_id"] = session_turn_id
     return _validate_turn_result_payload(response_payload)
+
+
+def _build_player_visible_turn_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：把主循环原始回合结果规整为玩家实际看到并应持久化的回合结果。
+    入参：payload（dict[str, Any]）：run_turn 返回的原始 payload，需包含 final_response。
+    出参：dict[str, Any]，浅拷贝 payload，final_response 已合并触发器叙事。
+    异常：缺少 final_response 时抛 KeyError，由 post-run 错误链路统一记录并缓存失败响应。
+    """
+    visible_payload = dict(payload)
+    # 持久化边界：会话历史必须保存玩家可见文本，避免下次加载时丢失触发器追加剧情。
+    visible_payload["final_response"] = _merge_trigger_narrative(
+        str(payload["final_response"]),
+        payload.get("trigger_events", []),
+    )
+    return visible_payload
 
 
 def _sse(event: str, payload: dict[str, Any]) -> str:
@@ -288,12 +496,12 @@ def _sse(event: str, payload: dict[str, Any]) -> str:
 def _parse_and_validate_turn_request(
     session_id: str,
     route_name: str,
-) -> tuple[dict[str, Any], dict[str, Any], str, str, str, bool] | tuple[tuple[Any, int]]:
+) -> tuple[dict[str, Any], dict[str, Any], str, str, str, str, bool] | tuple[tuple[Any, int]]:
     """
     功能：解析并校验回合请求公共参数，供普通与 SSE 路由复用。
     入参：session_id（str）：会话标识；route_name（str）：日志中的路由名称。
-    出参：成功返回 (session, body, request_id, user_input, character_id, sandbox_mode)；
-        校验失败返回单元素元组，元素为 error(...) 响应。
+    出参：成功返回 (session, body, request_id, user_input, public_character_id,
+        runtime_character_id, sandbox_mode)；校验失败返回单元素元组，元素为 error(...) 响应。
     异常：不抛业务异常；全部转换为受控错误响应。
     """
     if not validate_session_id(session_id):
@@ -309,15 +517,26 @@ def _parse_and_validate_turn_request(
     user_input = body.get("user_input")
     if not isinstance(user_input, str) or not user_input.strip() or len(user_input) > 500:
         return (error("INVALID_ARGUMENT", "user_input 不能为空且长度需在 1..500", 400),)
-    character_id = str(body.get("character_id", session["character_id"]))
-    if not validate_character_id(character_id):
+    requested_character_id = str(body.get("character_id", session["character_id"]))
+    if not validate_character_id(requested_character_id):
         return (error("INVALID_ARGUMENT", "character_id 格式非法", 400),)
-    if character_id != session["character_id"]:
+    public_character_id = str(session["character_id"])
+    runtime_character_id = str(session.get("runtime_character_id") or public_character_id)
+    allowed_character_ids = {public_character_id, runtime_character_id}
+    if requested_character_id not in allowed_character_ids:
         return (error("TURN_CONFLICT", "character_id 与会话绑定不一致", 409),)
-    if not ensure_character_available(character_id):
+    if not ensure_character_available(runtime_character_id):
         return (error("CHARACTER_NOT_FOUND", "会话绑定角色不存在，无法执行回合", 404),)
     sandbox_mode = bool(body.get("sandbox_mode", session["sandbox_mode"]))
-    return session, body, request_id, user_input.strip(), character_id, sandbox_mode
+    return (
+        session,
+        body,
+        request_id,
+        user_input.strip(),
+        public_character_id,
+        runtime_character_id,
+        sandbox_mode,
+    )
 
 
 def _resolve_memory_policy(
@@ -353,7 +572,7 @@ def _refresh_session_and_apply_memory_policy(
     功能：在会话锁内刷新会话快照，并统一解析/写入本次请求的 memory 策略。
     入参：context（Any）：API 运行时上下文，需提供 session_store；session_id（str）：会话 ID；
         body（dict[str, Any]）：已解析请求体，memory 配置来源；
-        character_id（str）：已通过前置校验的角色 ID。
+        character_id（str）：已通过前置校验的请求角色 ID，可为基准或运行角色。
     出参：tuple[dict[str, Any] | None, tuple[Any, int] | None]；成功返回最新 session 与 None，
         失败返回 None 与可直接返回或转 SSE error 的错误响应。
     异常：底层会话读取或策略写入的 SQL 异常不在此捕获，由调用方按普通/SSE 链路降级。
@@ -362,7 +581,9 @@ def _refresh_session_and_apply_memory_policy(
     fresh_session = get_session(session_id)
     if fresh_session is None:
         return None, error("SESSION_NOT_FOUND", "session_id 不存在", 404)
-    if character_id != fresh_session["character_id"]:
+    public_character_id = str(fresh_session["character_id"])
+    runtime_character_id = str(fresh_session.get("runtime_character_id") or public_character_id)
+    if character_id not in {public_character_id, runtime_character_id}:
         return None, error("TURN_CONFLICT", "character_id 与会话绑定不一致", 409)
     memory_policy = _resolve_memory_policy(body, fresh_session)
     if isinstance(memory_policy, tuple):
@@ -454,6 +675,246 @@ def _ensure_sandbox_lock_preconditions(
     return fresh_session, None, acquired_now
 
 
+def _prepare_turn_execution_under_lock(
+    *,
+    context: Any,
+    session_id: str,
+    request_id: str,
+    body: dict[str, Any],
+    public_character_id: str,
+    runtime_character_id: str,
+    sandbox_mode: bool,
+) -> _TurnExecutionPreparation:
+    """
+    功能：在会话锁内完成回合执行前置准备，统一普通与 SSE 的状态写入顺序。
+    入参：context（Any）：运行时上下文；session_id/request_id（str）：会话与幂等键；
+        body（dict[str, Any]）：请求体；public_character_id/runtime_character_id（str）：角色 ID；
+        sandbox_mode（bool）：本次回合是否走沙盒写路径。
+    出参：_TurnExecutionPreparation，包含可继续执行的会话或需短路的错误/幂等结果。
+    异常：底层存储或幂等读取异常不捕获，交由普通/SSE 外层按各自协议降级。
+    """
+    refreshed_session, policy_error = _refresh_session_and_apply_memory_policy(
+        context=context,
+        session_id=session_id,
+        body=body,
+        character_id=public_character_id,
+    )
+    if policy_error is not None:
+        return _TurnExecutionPreparation(
+            session=None,
+            runtime_character_id=runtime_character_id,
+            error_response=policy_error,
+        )
+    if refreshed_session is None:
+        return _TurnExecutionPreparation(
+            session=None,
+            runtime_character_id=runtime_character_id,
+            error_response=error("SESSION_NOT_FOUND", "session_id 不存在", 404),
+        )
+
+    runtime_character_id = str(
+        refreshed_session.get("runtime_character_id") or runtime_character_id
+    )
+    existing = context.session_store.reserve_idempotent_request(
+        scope="create_turn",
+        session_id=session_id,
+        request_id=request_id,
+    )
+    if existing is not None:
+        return _TurnExecutionPreparation(
+            session=refreshed_session,
+            runtime_character_id=runtime_character_id,
+            idempotent_response=existing,
+        )
+
+    session, precheck_error, acquired_sandbox_lock = _ensure_sandbox_lock_preconditions(
+        context=context,
+        session=refreshed_session,
+        sandbox_mode=sandbox_mode,
+    )
+    if precheck_error is not None:
+        _clear_pending_idempotent_request(context, session_id, request_id)
+        return _TurnExecutionPreparation(
+            session=session,
+            runtime_character_id=runtime_character_id,
+            error_response=precheck_error,
+        )
+    return _TurnExecutionPreparation(
+        session=session,
+        runtime_character_id=runtime_character_id,
+        acquired_sandbox_lock=acquired_sandbox_lock,
+    )
+
+
+def _release_sandbox_lock_if_acquired(
+    *,
+    context: Any,
+    session_id: str,
+    acquired_sandbox_lock: bool,
+) -> None:
+    """
+    功能：在本请求确实抢占沙盒锁时释放租约，供成功与异常路径共同调用。
+    入参：context（Any）：运行时上下文；session_id（str）：会话 ID；
+        acquired_sandbox_lock（bool）：本请求是否新抢占沙盒锁。
+    出参：None。
+    异常：底层释放异常向上抛出，由调用方按当前回合阶段处理。
+    """
+    if not acquired_sandbox_lock:
+        return
+    main_loop = context.main_loop
+    if main_loop is not None:
+        main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+
+
+def _run_turn_and_release_sandbox_if_needed(
+    *,
+    context: Any,
+    session: dict[str, Any],
+    session_id: str,
+    user_input: str,
+    runtime_character_id: str,
+    sandbox_mode: bool,
+    acquired_sandbox_lock: bool,
+    trace_id: str,
+    request_id: str,
+    narrative_stream_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """
+    功能：执行 run_turn，并在本请求抢占沙盒锁但结果未进入沙盒时释放租约。
+    入参：context/session/session_id/user_input/runtime_character_id/sandbox_mode 为回合参数；
+        acquired_sandbox_lock（bool）：是否需负责释放沙盒锁；trace_id/request_id（str）：追踪键；
+        narrative_stream_callback（Callable | None）：SSE 增量回调，普通路由为 None。
+    出参：dict[str, Any]，run_turn 返回的回合 payload。
+    异常：run_turn 或沙盒锁释放异常向上抛出，由调用方清理幂等 pending 并转换响应。
+    """
+    payload = run_turn(
+        session,
+        user_input,
+        runtime_character_id,
+        sandbox_mode,
+        narrative_stream_callback=narrative_stream_callback,
+        trace_id=trace_id,
+        request_id=request_id,
+    )
+    if acquired_sandbox_lock and not bool(payload.get("is_sandbox_mode", False)):
+        _release_sandbox_lock_if_acquired(
+            context=context,
+            session_id=session_id,
+            acquired_sandbox_lock=True,
+        )
+    return payload
+
+
+def _persist_turn_result_and_memory(
+    *,
+    context: Any,
+    session_id: str,
+    request_id: str,
+    session: dict[str, Any],
+    user_input: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    功能：生成回合记忆、持久化回合结果、写入叙事记忆项并同步会话 MEMORY 文件。
+    入参：context（Any）：运行时上下文；session_id/request_id（str）：会话与幂等键；
+        session（dict[str, Any]）：已刷新会话；user_input（str）：玩家输入；
+        payload（dict[str, Any]）：run_turn 结果。
+    出参：dict[str, Any]，已通过 TurnResult 校验的响应 payload。
+    异常：记忆生成、持久化、契约校验或文件同步异常向上抛出，由 post-run 错误链路处理。
+    """
+    visible_payload = _build_player_visible_turn_payload(payload)
+    memory_summary = _build_memory_summary_if_needed(
+        context=context,
+        session_id=session_id,
+        session=session,
+        user_input=user_input,
+        payload=visible_payload,
+    )
+    response_payload, _ = context.session_store.persist_turn_result_with_idempotency(
+        scope="create_turn",
+        session_id=session_id,
+        request_id=request_id,
+        user_input=user_input,
+        turn_result=visible_payload,
+        memory_summary=memory_summary,
+        now_iso=now_iso(),
+        response_builder=lambda persisted_turn_id: _build_turn_response_payload(
+            payload=visible_payload,
+            session_id=session_id,
+            request_id=request_id,
+            memory_summary=memory_summary,
+            session_turn_id=persisted_turn_id,
+        ),
+        memory_items_builder=lambda persisted_turn_id: build_narrative_memory_items(
+            session_id=session_id,
+            session_turn_id=persisted_turn_id,
+            user_input=user_input,
+            turn_result=visible_payload,
+        ),
+    )
+    sync_session_agent_memory_file(context, session_id, memory_summary)
+    return cast(dict[str, Any], response_payload)
+
+
+def _build_and_cache_post_run_error_response(
+    *,
+    context: Any,
+    session_id: str,
+    request_id: str,
+    payload: dict[str, Any],
+    err: Exception,
+) -> tuple[dict[str, Any], int, str]:
+    """
+    功能：把持久化/响应构建失败转换为可缓存错误响应，阻止幂等重试重复执行主循环。
+    入参：context（Any）：运行时上下文；session_id/request_id（str）：会话与幂等键；
+        payload（dict[str, Any]）：run_turn 成功返回的负载；err（Exception）：post-run 异常。
+    出参：tuple[dict[str, Any], int, str]，错误响应体、HTTP 状态码与失败阶段。
+    异常：缓存失败由 _cache_post_run_error_response 内部降级；本函数不抛业务异常。
+    """
+    stage = "api.response_built" if isinstance(err, ValidationError) else "api.persisted"
+    trace_id, trace = _build_post_run_error_payload(payload, stage=stage, err=err)
+    response_body = _build_api_error_body(
+        code="INTERNAL_ERROR",
+        message=f"回合执行失败: {err}",
+        trace_id=trace_id,
+        trace=trace,
+    )
+    _cache_post_run_error_response(
+        context=context,
+        session_id=session_id,
+        request_id=request_id,
+        response_body=response_body,
+        status_code=500,
+    )
+    return response_body, 500, stage
+
+
+def _put_sse_error_from_http_response(
+    target_queue: queue.Queue[tuple[str, dict[str, Any]]],
+    error_response: tuple[Any, int],
+) -> None:
+    """
+    功能：把普通 error(...) 响应转换为 SSE error 事件并写入队列。
+    入参：target_queue（queue.Queue）：SSE 事件队列；
+        error_response（tuple[Any, int]）：HTTP 错误响应。
+    出参：None。
+    异常：响应体结构非法时降级为 INTERNAL_ERROR，不向外抛出业务异常。
+    """
+    body = error_response[0].get_json()
+    if isinstance(body, dict):
+        target_queue.put(("error", _error_body_to_sse_payload(body)))
+        return
+    target_queue.put(
+        (
+            "error",
+            {
+                "code": "INTERNAL_ERROR",
+                "message": "回合执行失败",
+            },
+        )
+    )
+
+
 @turns_blueprint.post("")
 def create_turn(session_id: str) -> tuple[Any, int]:
     """
@@ -466,59 +927,60 @@ def create_turn(session_id: str) -> tuple[Any, int]:
     parsed = _parse_and_validate_turn_request(session_id=session_id, route_name="create_turn")
     if len(parsed) == 1:
         return parsed[0]
-    session, body, request_id, user_input, character_id, sandbox_mode = parsed
+    (
+        session,
+        body,
+        request_id,
+        user_input,
+        public_character_id,
+        runtime_character_id,
+        sandbox_mode,
+    ) = parsed
 
     context = get_runtime_context()
     session_lock = context.get_session_lock(session_id)
     with session_lock:
-        refreshed_session, policy_error = _refresh_session_and_apply_memory_policy(
+        preparation = _prepare_turn_execution_under_lock(
             context=context,
-            session_id=session_id,
-            body=body,
-            character_id=character_id,
-        )
-        if policy_error is not None:
-            return policy_error
-        if refreshed_session is None:
-            return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
-        session = refreshed_session
-        existing = context.session_store.get_idempotent_response(
-            scope="create_turn",
             session_id=session_id,
             request_id=request_id,
-        )
-        if existing is not None:
-            return success(existing)
-        session, precheck_error, acquired_sandbox_lock = _ensure_sandbox_lock_preconditions(
-            context=context,
-            session=session,
+            body=body,
+            public_character_id=public_character_id,
+            runtime_character_id=runtime_character_id,
             sandbox_mode=sandbox_mode,
         )
-        if precheck_error is not None:
-            return precheck_error
+        if preparation.error_response is not None:
+            return preparation.error_response
+        if preparation.idempotent_response is not None:
+            return _cached_idempotent_http_response(preparation.idempotent_response)
+        if preparation.session is None:
+            return error("SESSION_NOT_FOUND", "session_id 不存在", 404)
+        session = preparation.session
+        runtime_character_id = preparation.runtime_character_id
         try:
             trace_id = new_trace_id()
-            payload = run_turn(
-                session,
-                user_input,
-                character_id,
-                sandbox_mode,
+            payload = _run_turn_and_release_sandbox_if_needed(
+                context=context,
+                session=session,
+                session_id=session_id,
+                user_input=user_input,
+                runtime_character_id=runtime_character_id,
+                sandbox_mode=sandbox_mode,
+                acquired_sandbox_lock=preparation.acquired_sandbox_lock,
                 trace_id=trace_id,
                 request_id=request_id,
             )
-            if acquired_sandbox_lock and not bool(payload.get("is_sandbox_mode", False)):
-                main_loop = context.main_loop
-                if main_loop is not None:
-                    main_loop.db_updater.release_sandbox_lock(session_id=session_id)
         except TurnExecutionError as err:
-            if acquired_sandbox_lock:
-                main_loop = context.main_loop
-                if main_loop is not None:
-                    main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+            _release_sandbox_lock_if_acquired(
+                context=context,
+                session_id=session_id,
+                acquired_sandbox_lock=preparation.acquired_sandbox_lock,
+            )
+            _clear_pending_idempotent_request(context, session_id, request_id)
             logger.exception(
-                "回合执行失败: route=create_turn session_id=%s request_body=%s",
+                "回合执行失败: route=create_turn session_id=%s request_id=%s",
                 session_id,
-                body,
+                request_id,
             )
             message = (
                 "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。"
@@ -533,57 +995,45 @@ def create_turn(session_id: str) -> tuple[Any, int]:
                 trace=err.trace,
             )
         except Exception:
-            if acquired_sandbox_lock:
-                main_loop = context.main_loop
-                if main_loop is not None:
-                    main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+            _release_sandbox_lock_if_acquired(
+                context=context,
+                session_id=session_id,
+                acquired_sandbox_lock=preparation.acquired_sandbox_lock,
+            )
+            _clear_pending_idempotent_request(context, session_id, request_id)
             raise
         try:
-            memory_summary = _build_memory_summary_if_needed(
+            response_payload = _persist_turn_result_and_memory(
                 context=context,
                 session_id=session_id,
                 session=session,
+                request_id=request_id,
                 user_input=user_input,
                 payload=payload,
             )
-            response_payload, _ = context.session_store.persist_turn_result_with_idempotency(
-                scope="create_turn",
-                session_id=session_id,
-                request_id=request_id,
-                user_input=user_input,
-                turn_result=payload,
-                memory_summary=memory_summary,
-                now_iso=now_iso(),
-                response_builder=lambda persisted_turn_id: _build_turn_response_payload(
-                    payload=payload,
-                    session_id=session_id,
-                    request_id=request_id,
-                    memory_summary=memory_summary,
-                    session_turn_id=persisted_turn_id,
-                ),
-            )
             return success(response_payload)
         except Exception as err:  # noqa: BLE001
-            stage = "api.response_built" if isinstance(err, ValidationError) else "api.persisted"
-            trace_id, trace = _build_post_run_error_payload(payload, stage=stage, err=err)
+            response_body, status_code, stage = _build_and_cache_post_run_error_response(
+                context=context,
+                session_id=session_id,
+                request_id=request_id,
+                payload=payload,
+                err=err,
+            )
             logger.exception(
                 "回合 post-run 失败: route=create_turn stage=%s session_id=%s request_id=%s",
                 stage,
                 session_id,
                 request_id,
             )
-            return error(
-                "INTERNAL_ERROR",
-                f"回合执行失败: {err}",
-                500,
-                trace_id=trace_id,
-                trace=trace,
-            )
+            return jsonify(response_body), status_code
 
 
 def _emit_sse_progress_events(target_queue: queue.Queue[tuple[str, dict[str, Any]]]) -> None:
     """
-    功能：向 SSE 队列推送固定阶段进度事件。
+    功能：向 SSE 队列推送固定阶段进度事件（7 个阶段）。
+    事件序列：loading_scene → parsing_nlu → validating_action → resolving_action →
+    rendering_gm → evaluating_triggers → resolving_quests。
     入参：target_queue（queue.Queue）：SSE 事件队列。
     出参：None。
     异常：队列写入异常向上抛出，由上层 worker 统一兜底。
@@ -593,6 +1043,8 @@ def _emit_sse_progress_events(target_queue: queue.Queue[tuple[str, dict[str, Any
     target_queue.put(("validating_action", {"message": "校验动作合法性"}))
     target_queue.put(("resolving_action", {"message": "执行确定性结算"}))
     target_queue.put(("rendering_gm", {"message": "生成叙事响应"}))
+    target_queue.put(("evaluating_triggers", {"message": "评估剧本触发器"}))
+    target_queue.put(("resolving_quests", {"message": "推进任务状态"}))
 
 
 def _emit_sse_detail_events(
@@ -600,7 +1052,8 @@ def _emit_sse_detail_events(
     payload: dict[str, Any],
 ) -> None:
     """
-    功能：根据回合 payload 发送阶段明细事件，供前端展示调试信息。
+    功能：根据回合 payload 发送阶段明细事件（含 evaluating_triggers_detail /
+    resolving_quests_detail），供前端展示调试信息。
     入参：target_queue（queue.Queue）：SSE 事件队列；payload（dict[str, Any]）：回合结果。
     出参：None。
     异常：不抛业务异常；字段缺失使用空值降级。
@@ -674,6 +1127,38 @@ def _emit_sse_detail_events(
             },
         )
     )
+    trigger_events = payload.get("trigger_events")
+    pack_runtime_errors = payload.get("pack_runtime_errors")
+    target_queue.put(
+        (
+            "evaluating_triggers_detail",
+            {
+                "message": "剧本触发器已评估",
+                "detail": {
+                    "triggers_fired": (
+                        len(trigger_events) if isinstance(trigger_events, list) else 0
+                    ),
+                    "pack_runtime_errors": (
+                        len(pack_runtime_errors) if isinstance(pack_runtime_errors, list) else 0
+                    ),
+                },
+            },
+        )
+    )
+    quest_updates = payload.get("quest_updates")
+    target_queue.put(
+        (
+            "resolving_quests_detail",
+            {
+                "message": "任务状态已推进",
+                "detail": {
+                    "quests_updated": (
+                        len(quest_updates) if isinstance(quest_updates, list) else 0
+                    ),
+                },
+            },
+        )
+    )
 
 
 def _run_turn_stream_with_lock(
@@ -683,7 +1168,8 @@ def _run_turn_stream_with_lock(
     body: dict[str, Any],
     session: dict[str, Any],
     user_input: str,
-    character_id: str,
+    public_character_id: str,
+    runtime_character_id: str,
     sandbox_mode: bool,
     narrative_callback: Callable[[str], None],
     fallback_trace_id: str,
@@ -691,8 +1177,8 @@ def _run_turn_stream_with_lock(
 ) -> None:
     """
     功能：在会话锁内执行流式回合与持久化，并向队列发送 done/error。
-    入参：context/session_id/request_id/body/session/user_input/character_id/sandbox_mode
-        为执行参数；
+    入参：context/session_id/request_id/body/session/user_input/public_character_id/
+        runtime_character_id/sandbox_mode 为执行参数；
         narrative_callback（Callable[[str], None]）：GM 增量回调；
         fallback_trace_id（str）：回退 trace_id；target_queue（queue.Queue）：SSE 队列。
     出参：None。
@@ -700,34 +1186,22 @@ def _run_turn_stream_with_lock(
     """
     session_lock = context.get_session_lock(session_id)
     with session_lock:
-        refreshed_session, policy_error = _refresh_session_and_apply_memory_policy(
+        preparation = _prepare_turn_execution_under_lock(
             context=context,
             session_id=session_id,
+            request_id=request_id,
             body=body,
-            character_id=character_id,
+            public_character_id=public_character_id,
+            runtime_character_id=runtime_character_id,
+            sandbox_mode=sandbox_mode,
         )
-        if policy_error is not None:
-            err_body = policy_error[0].get_json()
-            target_queue.put(
-                (
-                    "error",
-                    {
-                        "code": err_body["error"]["code"],
-                        "message": err_body["error"]["message"],
-                    },
-                )
-            )
+        if preparation.error_response is not None:
+            _put_sse_error_from_http_response(target_queue, preparation.error_response)
             return
-        if refreshed_session is None:
-            target_queue.put(
-                (
-                    "error",
-                    error("SESSION_NOT_FOUND", "session_id 不存在", 404)[0].get_json(),
-                )
-            )
+        if preparation.idempotent_response is not None:
+            target_queue.put(_cached_idempotent_sse_event(preparation.idempotent_response))
             return
-        session = refreshed_session
-        if session is None:
+        if preparation.session is None:
             target_queue.put(
                 (
                     "error",
@@ -735,88 +1209,74 @@ def _run_turn_stream_with_lock(
                 )
             )
             return
-        existing = context.session_store.get_idempotent_response(
-            scope="create_turn",
-            session_id=session_id,
-            request_id=request_id,
-        )
-        if existing is not None:
-            target_queue.put(("done", existing))
-            return
-        session, precheck_error, acquired_sandbox_lock = _ensure_sandbox_lock_preconditions(
-            context=context,
-            session=session,
-            sandbox_mode=sandbox_mode,
-        )
-        if precheck_error is not None:
-            err_body = precheck_error[0].get_json()
-            target_queue.put(
-                (
-                    "error",
-                    {
-                        "code": err_body["error"]["code"],
-                        "message": err_body["error"]["message"],
-                    },
-                )
-            )
-            return
+        session = preparation.session
+        runtime_character_id = preparation.runtime_character_id
         _emit_sse_progress_events(target_queue)
+        # A2-Plus: trigger/quest stage started events (SSE)
+        # 功能：在 run_turn 前推送 trigger_evaluation 与 quest_resolution 的 started 事件
+        target_queue.put(("trigger_evaluation", {"status": "started"}))
+        target_queue.put(("quest_resolution", {"status": "started"}))
         try:
-            payload = run_turn(
-                session,
-                user_input,
-                character_id,
-                sandbox_mode,
+            payload = _run_turn_and_release_sandbox_if_needed(
+                context=context,
+                session=session,
+                session_id=session_id,
+                user_input=user_input,
+                runtime_character_id=runtime_character_id,
+                sandbox_mode=sandbox_mode,
+                acquired_sandbox_lock=preparation.acquired_sandbox_lock,
                 narrative_stream_callback=narrative_callback,
                 trace_id=fallback_trace_id,
                 request_id=request_id,
             )
-            if acquired_sandbox_lock and not bool(payload.get("is_sandbox_mode", False)):
-                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
         except Exception:
-            if acquired_sandbox_lock:
-                context.main_loop.db_updater.release_sandbox_lock(session_id=session_id)
+            _release_sandbox_lock_if_acquired(
+                context=context,
+                session_id=session_id,
+                acquired_sandbox_lock=preparation.acquired_sandbox_lock,
+            )
+            _clear_pending_idempotent_request(context, session_id, request_id)
             raise
         _emit_sse_detail_events(target_queue, payload)
+        # A2-Plus: trigger/quest stage done events (SSE)
+        # 功能：从 run_turn 返回值获取 trigger_events/quest_updates 计数并推送 done 事件
+        target_queue.put(
+            (
+                "trigger_evaluation",
+                {
+                    "status": "done",
+                    "triggers_fired": len(payload.get("trigger_events", [])),
+                },
+            )
+        )
+        target_queue.put(
+            (
+                "quest_resolution",
+                {
+                    "status": "done",
+                    "quests_updated": len(payload.get("quest_updates", [])),
+                },
+            )
+        )
         try:
-            memory_summary = _build_memory_summary_if_needed(
+            response_payload = _persist_turn_result_and_memory(
                 context=context,
                 session_id=session_id,
                 session=session,
+                request_id=request_id,
                 user_input=user_input,
                 payload=payload,
             )
-            response_payload, _ = context.session_store.persist_turn_result_with_idempotency(
-                scope="create_turn",
-                session_id=session_id,
-                request_id=request_id,
-                user_input=user_input,
-                turn_result=payload,
-                memory_summary=memory_summary,
-                now_iso=now_iso(),
-                response_builder=lambda persisted_turn_id: _build_turn_response_payload(
-                    payload=payload,
-                    session_id=session_id,
-                    request_id=request_id,
-                    memory_summary=memory_summary,
-                    session_turn_id=persisted_turn_id,
-                ),
-            )
             target_queue.put(("done", response_payload))
         except Exception as err:  # noqa: BLE001
-            stage = "api.response_built" if isinstance(err, ValidationError) else "api.persisted"
-            trace_id, trace = _build_post_run_error_payload(payload, stage=stage, err=err)
-            target_queue.put(
-                (
-                    "error",
-                    {
-                        "code": "INTERNAL_ERROR",
-                        "message": f"回合执行失败: {err}",
-                        "trace_id": trace_id,
-                        "trace": trace,
-                    },
-                )
+            response_body, _, _stage = _build_and_cache_post_run_error_response(
+                context=context,
+                session_id=session_id,
+                request_id=request_id,
+                payload=payload,
+                err=err,
             )
+            target_queue.put(("error", _error_body_to_sse_payload(response_body)))
 
 
 def _generate_turn_stream_events(
@@ -827,7 +1287,8 @@ def _generate_turn_stream_events(
     body: dict[str, Any],
     session: dict[str, Any],
     user_input: str,
-    character_id: str,
+    public_character_id: str,
+    runtime_character_id: str,
     sandbox_mode: bool,
 ) -> Iterator[str]:
     """
@@ -841,10 +1302,22 @@ def _generate_turn_stream_events(
     worker_trace_id = new_trace_id()
 
     def emit_narrative_delta(delta: str) -> None:
+        """
+        功能：把 GM 流式叙事片段转投到 SSE 事件队列。
+        入参：delta（str）：主循环回调产生的增量文本，空字符串会被忽略。
+        出参：None。
+        异常：queue.put 失败时向上抛出，由 worker 异常分支转换为 SSE error。
+        """
         if delta:
             event_queue.put(("gm_delta", {"delta": delta}))
 
     def run_turn_worker() -> None:
+        """
+        功能：在后台线程内持有 Flask app context 并执行单回合流式链路。
+        入参：无显式参数；闭包读取当前请求、会话、角色和队列上下文。
+        出参：None；终态通过 event_queue 投递 done 或 error 事件。
+        异常：TurnExecutionError 转为业务 error 事件；其他异常记录堆栈后转兜底 error。
+        """
         try:
             with app.app_context():
                 _run_turn_stream_with_lock(
@@ -854,7 +1327,8 @@ def _generate_turn_stream_events(
                     body=body,
                     session=session,
                     user_input=user_input,
-                    character_id=character_id,
+                    public_character_id=public_character_id,
+                    runtime_character_id=runtime_character_id,
                     sandbox_mode=sandbox_mode,
                     narrative_callback=emit_narrative_delta,
                     fallback_trace_id=worker_trace_id,
@@ -862,9 +1336,9 @@ def _generate_turn_stream_events(
                 )
         except TurnExecutionError as err:
             logger.exception(
-                "回合执行失败: route=create_turn_stream session_id=%s request_body=%s",
+                "回合执行失败: route=create_turn_stream session_id=%s request_id=%s",
                 session_id,
-                body,
+                request_id,
             )
             message = (
                 "回合执行超时：本地模型超过 3 分钟仍未完成，请稍后重试或改用更短的行动描述。"
@@ -935,7 +1409,15 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
     )
     if len(parsed) == 1:
         return parsed[0]
-    session, body, request_id, user_input, character_id, sandbox_mode = parsed
+    (
+        session,
+        body,
+        request_id,
+        user_input,
+        public_character_id,
+        runtime_character_id,
+        sandbox_mode,
+    ) = parsed
     context = get_runtime_context()
     app = cast(Any, current_app)._get_current_object()
     return Response(
@@ -948,7 +1430,8 @@ def create_turn_stream(session_id: str) -> tuple[Any, int] | Response:
                 body=body,
                 session=session,
                 user_input=user_input,
-                character_id=character_id,
+                public_character_id=public_character_id,
+                runtime_character_id=runtime_character_id,
                 sandbox_mode=sandbox_mode,
             )
         ),
@@ -1023,6 +1506,8 @@ def get_turn(session_id: str, session_turn_id: int) -> tuple[Any, int]:
             "is_valid": target["is_valid"],
             "action_intent": target["action_intent"],
             "physics_diff": target["physics_diff"],
+            "trigger_events": target.get("trigger_events", []),
+            "quest_updates": target.get("quest_updates", []),
             "final_response": target["final_response"],
             "memory_summary": target["memory_summary"],
         }
