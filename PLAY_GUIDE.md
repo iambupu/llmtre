@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 当前验证过的默认配置使用 Ollama：
 
-- LLM：`qwen3:8b`
+- LLM：`qwen3.5:9b`
 - Embedding：`bge-m3`
 
 如果使用其他模型，需要同步修改：
@@ -136,6 +136,14 @@ uv run python tools/mod_manager.py scan
 
 ## 2. 启动游戏
 
+Windows 下推荐使用一键启动脚本：
+
+```powershell
+.\start.ps1 -Mode dev
+```
+
+也可以直接启动 Flask：
+
 ```bash
 uv run python app.py
 ```
@@ -156,6 +164,8 @@ http://localhost:5000/play
 
 ```bash
 npm install
+npm run typecheck
+npm test
 npm run build
 ```
 
@@ -183,20 +193,20 @@ npm run build
 ## 4. 第一局推荐流程
 
 1. 确认顶部“角色”为 `player_01`。
-2. 在顶部剧本选择中选择已导入 pack，或在未选择 pack 时填写背景文本。
+2. 在顶部剧本选择中选择 `echoes_under_red_lantern`，或在未选择 pack 时填写背景文本。
 3. 点击 `新会话`。
 4. 等待 GM 开场叙事显示在“回合记录”中。
 5. 阅读“当前场景”，重点看地点描述、出口、可见对象和建议行动。
-6. 点击页面给出的建议行动，或在输入框输入 `观察雾林边缘` 后点击 `发送`。
+6. 点击页面给出的建议行动，或在输入框输入 `观察周围` 后点击 `发送`。
 7. 继续输入 3 到 5 个明确行动，例如：
 
 ```text
-观察雾林边缘
-沿旧路进入废弃营地
-呼唤巡林人艾拉
-翻看火坑灰烬
-沿石阶前往遗迹门
-询问石门旁的守门学者
+观察周围
+检查潮汐告示
+询问船夫任伯
+前往旧账房
+检查潮税账册
+返回赤灯巷
 ```
 
 8. 点击记忆区的 `读取` 查看近期记忆文本（由有效回合拼接/分段摘要生成）。
@@ -205,17 +215,19 @@ npm run build
 
 ## 5. 剧本包流程
 
-外部示例 demo pack 位于 `examples/story_packs/demo_a2_core`。命令行校验：
+当前本地演示 pack 是 `story_packs/echoes_under_red_lantern`，标题为“赤灯下的回声”。命令行校验：
 
 ```bash
-uv run python -m tools.packs.validate examples/story_packs/demo_a2_core
+uv run python -m tools.packs.validate story_packs/echoes_under_red_lantern
 ```
+
+`examples/story_packs/` 下仍保留 `demo_a2_core` 和赤灯示例副本，用于外部示例、导入演示和回归测试。
 
 `/app` 右侧“剧本管理”区提供三个发布期动作：
 
 - `预览`：读取当前选择 pack 的 manifest、summary 和场景摘要。
 - `导入剧本`：把 JSON 草稿提交给 `POST /api/story-packs`，后端落盘并复验。
-- `删除`：删除非官方 pack；官方 `demo_a2_core` 会被保护。
+- `删除`：删除本地 pack 内容目录，不删除历史会话；旧会话继续保留创建时冻结的 pack 元数据。
 
 导入 payload 的最小结构：
 
@@ -330,6 +342,7 @@ A2-Release 目标测试：
 ```bash
 uv run python -m pytest tests/test_web_api/test_story_packs_a2.py tests/test_tools/test_story_pack_validator_a2.py -q
 uv run python -m tools.packs.validate examples/story_packs/demo_a2_core
+uv run python -m tools.packs.validate story_packs/echoes_under_red_lantern
 uv run python -m tools.logs.check_runtime_logs --since-minutes 240
 ```
 
@@ -340,6 +353,8 @@ cd frontend
 npm run typecheck
 npm test
 npm run build
+npm run playtest:red-lantern
+npm run playtest:a2-release-import
 ```
 
 Windows 下 pytest 清理临时目录或 Vitest 启动 esbuild 时可能出现权限噪声；若断言未失败，可换用仓库内 `--basetemp test_runs/<name>` 或非沙箱环境重跑同一命令。
@@ -364,7 +379,7 @@ http://localhost:5000/app
 
 ### 创建会话或回合很慢
 
-本地模型首次加载可能较慢。先确认 Ollama 正在运行，且 `qwen3:8b` 与 `bge-m3` 可用。
+本地模型首次加载可能较慢。先确认 Ollama 正在运行，且 `qwen3.5:9b` 与 `bge-m3` 可用。
 
 如果只想验证纯确定性链路，需要同时关闭 NLU 和 GM 的模型调用。仅关闭 GM 只会切换叙事模板，NLU 仍可能走 LLM 兜底。
 

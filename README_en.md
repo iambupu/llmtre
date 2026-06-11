@@ -6,7 +6,6 @@ Chinese Version: [README.md](README.md) | English Version: `README_en.md`
 
 - [Overview](#overview)
 - [Core Features](#core-features)
-- [Glossary](#glossary)
 - [Architecture & Minimal Turn Flow](#architecture--minimal-turn-flow)
 - [Quick Start](#quick-start)
 - [Running & Playing](#running--playing)
@@ -23,6 +22,8 @@ Chinese Version: [README.md](README.md) | English Version: `README_en.md`
 
 TRE (Text TRPG Engine) is a text-based TRPG engine built on the principle of **deterministic-logic-first**. It anchors numerical rules, state changes, and persistent facts in code and SQLite, while confining natural language understanding and narrative expression to the Agent layer. The goal is to build an AI-powered tabletop RPG engine skeleton that is continuously playable, rollback-capable, verifiable, and extensible.
 
+The current A2-Release is in a playable delivery state. `/app` is the recommended entry point and supports Story Pack selection, preview, import, deletion, session creation, session resume, and session-level history recovery. The sample Story Pack "赤灯下的回声" covers 6 scenes, 11 interactions, 1 lightweight quest, and media assets, with scripts for external import and a 16-turn real-play acceptance path.
+
 ## Core Features
 
 - **Deterministic Logic First**: Action validation, numerical resolution, and state mutations are governed by backend rules and the database.
@@ -30,22 +31,11 @@ TRE (Text TRPG Engine) is a text-based TRPG engine built on the principle of **d
 - **Dual-Track Workflow**: The inner loop (LangGraph StateGraph-driven synchronous main loop) and outer loop (LlamaIndex Workflows-driven async event flow) run decoupled — the inner loop handles player turns, the outer loop handles world evolution and async compensation.
 - **Dual Web API**: Both standard JSON turn endpoints and SSE streaming turn endpoints are available.
 - **Structured Scene Snapshots**: Each turn returns location, exits, visible objects, available actions, and recommended actions.
+- **Story Pack Content System**: Local packs, external JSON pack imports, bad-pack diagnostics, session binding, and pack deletion without deleting historical sessions.
+- **Player-facing `/app` Frontend**: Scene, objective, grouped actions, turn log, quests, status, inventory, media, and debug panels.
 - **Rollback-capable Sandbox**: Active/Shadow dual-table snapshots with sandbox commit/discard support.
 - **MOD & RAG Extensibility**: MOD layered overrides and read-only RAG context supplementation.
 - **Built-in Observability**: Main loop, event bus, outer loop, TurnTrace, and SSE events are all traceable.
-
-## Glossary
-
-- **TRPG**: Tabletop Role-Playing Game.
-- **NLU**: Natural Language Understanding.
-- **GM**: Game Master.
-- **RAG**: Retrieval-Augmented Generation.
-- **MOD**: Modification, an extension module.
-- **SSE**: Server-Sent Events, used for streaming responses.
-- **Active/Shadow**: The main state table and the sandbox state table, used to isolate narrative changes that have not yet been merged into the main timeline.
-- **LangGraph**: A state-graph-based synchronous workflow framework used for the inner loop turn-processing main loop.
-- **Workflows**: LlamaIndex's async event-driven workflow framework, used for the outer loop world evolution and event compensation.
-- **AST**: Abstract Syntax Tree, used for safe whitelist-based expression evaluation in task scripts.
 
 ## Architecture & Minimal Turn Flow
 
@@ -95,7 +85,7 @@ pip install -r requirements.txt
 - RAG configuration: `config/rag_config.yml`
 - Agent configuration: `config/agent_model_config.yml`
 
-The verified local model combination for this repository is `ollama/qwen3:8b` (LLM) and `ollama/bge-m3` (embedding).
+The verified local model combination for this repository is `ollama/qwen3.5:9b` (LLM) and `ollama/bge-m3` (embedding). Default Agent bindings still stay deterministic and disabled; enable real models in `config/agent_model_config.yml` only when needed.
 
 ### 3. Initialize State, Knowledge Base, and MODs
 
@@ -115,6 +105,25 @@ Notes:
 
 ### 4. Start the Server
 
+On Windows, the recommended startup path is:
+
+```powershell
+.\start.ps1 -Mode dev
+```
+
+Common modes:
+
+```powershell
+.\start.ps1 -CheckOnly -SkipInstall -NoBrowser
+.\start.ps1 -Mode dev -SkipInstall
+.\start.ps1 -Mode dist -SkipInstall
+start.bat -Mode dev
+```
+
+The script checks project structure, selects Python/npm, builds the frontend when needed, starts Flask/Vite, and writes service logs under `logs/start/`.
+
+You can also start Flask directly:
+
 ```bash
 uv run python app.py
 ```
@@ -131,13 +140,16 @@ Frontend development and build commands must be executed in the `frontend/` dire
 ```bash
 npm install
 npm run dev
+npm run typecheck
+npm test
 npm run build
 ```
 
 Further notes:
 
 - For the player experience walkthrough, see [PLAY_GUIDE.md](PLAY_GUIDE.md).
-- `/app` is the currently recommended play entry point; `/play` is retained for compatibility, comparison, and debugging verification.
+- `/app` is the currently recommended play entry point, supporting Story Pack selection, preview, import, deletion, session creation, session resume, and session history recovery. `/play` is retained for compatibility, comparison, and debugging verification.
+- The debug panel still preserves Trace, `request_id`, SSE events, status logs, and memory information. The normal player view hides internal hash/API fields.
 
 ## Common Dev Commands
 
@@ -193,6 +205,31 @@ The registry records:
 - `conflict_strategy`: Field conflict handling strategy
 - `hooks_manifest`: Hooks, trigger points, and write fields declared by the MOD
 
+### A2 Story Pack Acceptance
+
+```bash
+python -m tools.packs.validate examples/story_packs/demo_a2_core
+python -m tools.packs.validate story_packs/echoes_under_red_lantern
+python examples/demo_playthrough.py
+```
+
+`/app` can create sessions from user-imported packs and can import custom packs as JSON file collections.
+- Rebuild the local state database after modifying `state/models/` or `state/data/`.
+
+### A2-Release Play Acceptance
+
+These commands cover the sample pack UI path, external JSON pack import, bad-pack rejection, session creation, 16-turn progression, and keeping old session history after pack deletion:
+
+```powershell
+Push-Location frontend
+npm run playtest:red-lantern
+npm run playtest:a2-release-import
+Pop-Location
+
+python -m tools.logs.check_runtime_logs --since-minutes 120
+git diff --check
+```
+
 ### Generate JSON Schemas
 
 Regenerates JSON schemas from the Pydantic models in `state/models/`.
@@ -241,7 +278,7 @@ Local Ollama example:
 ```yaml
 llm:
   provider: "ollama"
-  model: "qwen3:8b"
+  model: "qwen3.5:9b"
   base_url: "http://localhost:11434"
 
 embedding:
@@ -376,8 +413,15 @@ Commonly modified fields:
 ## API Overview
 
 - Create session: `POST /api/sessions`
+- List/read sessions: `GET /api/sessions`, `GET /api/sessions/{session_id}`
+- Delete session: `DELETE /api/sessions/{session_id}`
 - Standard turn: `POST /api/sessions/{session_id}/turns`
 - SSE streaming turn: `POST /api/sessions/{session_id}/turns/stream`
+- Story Pack list: `GET /api/story-packs`
+- Story Pack detail: `GET /api/story-packs/{pack_id}`
+- Story Pack import: `POST /api/story-packs`
+- Story Pack delete: `DELETE /api/story-packs/{pack_id}`
+- Session runtime reset: `POST /api/sessions/{session_id}/reset`
 
 ## Main Directories & Entry Points
 
@@ -387,11 +431,13 @@ Commonly modified fields:
 - `game_workflows/`: Main loop, outer-loop bridge, RAG read-only bridge, and scene helper logic
 - `state/`: Pydantic data contracts, seed data, SQLite initialization, and runtime schemas
 - `tools/`: Deterministic tools, RAG import, MOD management, log verification, and compensation replay tools
-- `web_api/`: Flask contract API, Blueprints, and `/play` page entry
+- `web_api/`: Flask contract API, Blueprints, Story Pack management, and `/app` / `/play` page entries
 - `mods/`: MOD extensions and scripts
 - `static/`: Legacy playground frontend scripts and styles
 - `templates/`: Flask page templates
 - `frontend/`: React + Vite + TypeScript frontend project, entry at `/app`
+- `story_packs/`: local Story Packs available at runtime, such as "赤灯下的回声"
+- `examples/story_packs/`: external sample Story Packs and demo materials
 - `tests/`: pytest regression tests
 - `docs/`: Local rulebook and setting document input directory, Git-ignored by default
 - `knowledge_base/`: RAG vector and graph index output directory
@@ -402,12 +448,12 @@ Commonly modified fields:
 ## Known Limitations
 
 - `/app` (React) and `/play` (legacy) currently coexist. Their API contracts are consistent, but the presentation layer and debug rendering are not identical.
-- `/app` top toolbar and scene card have been deduplicated: `New Session` / `Load` appear only in the top toolbar.
 - `/app` character status card uses the data returned by the backend after session creation or loading. Before a session is created, placeholder values `--` are displayed.
 - `/app` character status summary and status labels are provided by the backend `active_character.status_summary/status_effects/state_flags/status_context`. The frontend only displays; it does not infer status.
 - `/app` debug console uses a fixed top-bottom layout: the top section has `Status / Trace / Logs / Memory` tabs, and the bottom section has the corresponding functional area.
 - The A1 page directly exposes `Merge into Mainline` / `Rollback Sandbox` buttons, but normal new sessions are not sandbox branches by default.
 - Task script evaluation has been switched to AST whitelist expression evaluation, but this implementation is not a strong security sandbox. In production, script sources must still be trusted.
+- Story Pack deletion only deletes the local pack content. It does not delete historical sessions, which keep the pack metadata frozen at session creation time.
 
 ## Contributing
 
@@ -462,5 +508,5 @@ python -m tools.logs.check_runtime_logs
 
 ## Version Info
 
-- Current version: A2 (Alpha 2)
+- Current version: A2-Release playable delivery state (Story Pack management, session persistence, player-facing `/app`, and regression acceptance scripts are closed)
 - Changelog: see [CHANGELOG.md](CHANGELOG.md)

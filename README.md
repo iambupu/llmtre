@@ -6,7 +6,6 @@
 
 - [项目概述](#项目概述)
 - [核心特性](#核心特性)
-- [术语表](#术语表)
 - [架构与最小链路](#架构与最小链路)
 - [快速开始](#快速开始)
 - [运行与游玩](#运行与游玩)
@@ -23,6 +22,8 @@
 
 TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念的文本 TRPG 引擎。它把数值规则、状态变化和持久化事实固定在代码与 SQLite 中，把自然语言理解和叙事表达限制在 Agent 层，目标是构建一个可连续试玩、可回滚、可验证、可扩展的 AI 跑团引擎骨架。
 
+当前 A2-Release 已进入可试玩交付态：`/app` 是推荐入口，支持 Story Pack 选择、预览、导入、删除、创建会话、继续会话和会话级历史恢复；示例剧本「赤灯下的回声」覆盖 6 个场景、11 个交互、1 条轻任务和媒体资产，可通过脚本完成外部导入与 16 回合真实试玩验收。
+
 ## 核心特性
 
 - **确定性逻辑优先**：动作合法性、数值结算和状态写入以后端规则与数据库为准。
@@ -30,22 +31,11 @@ TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念�
 - **双轨工作流**：内环（LangGraph StateGraph 驱动的同步主循环）与外环（LlamaIndex Workflows 驱动的异步事件流）解耦运行，内环负责玩家回合响应，外环负责世界演化与异步补偿。
 - **双路 Web 接口**：同时提供普通 JSON 回合接口和 SSE 流式回合接口。
 - **结构化场景快照**：每回合返回地点、出口、可见对象、可用动作和推荐行动。
+- **Story Pack 内容系统**：支持本地包、外部 JSON 包导入、坏包诊断、会话绑定和删除包不删除历史会话。
+- **玩家化 `/app` 前端**：提供场景、目标、行动分组、回合记录、任务、状态、背包、媒体和调试面板。
 - **可回滚沙盒**：支持 Active/Shadow 双表快照和 sandbox commit/discard。
 - **MOD 与 RAG 扩展**：支持 MOD 分层覆盖与 RAG 只读上下文补充。
 - **可观测性内建**：主循环、事件总线、外环、TurnTrace、SSE 事件都可追踪。
-
-## 术语表
-
-- **TRPG**：Tabletop Role-Playing Game，桌面角色扮演游戏。
-- **NLU**：Natural Language Understanding，自然语言理解。
-- **GM**：Game Master，游戏主持人。
-- **RAG**：Retrieval-Augmented Generation，检索增强生成。
-- **MOD**：Modification，修改或扩展模块。
-- **SSE**：Server-Sent Events，服务器发送事件，用于流式响应。
-- **Active/Shadow**：主线状态表与沙盒状态表，用于隔离未并入主线的剧情变更。
-- **LangGraph**：基于状态图的同步工作流框架，用于内环回合处理主循环。
-- **Workflows**：LlamaIndex 提供的异步事件驱动工作流框架，用于外环世界演化与事件补偿。
-- **AST**：Abstract Syntax Tree，抽象语法树，用于任务脚本的安全白名单表达式求值。
 
 ## 架构与最小链路
 
@@ -95,7 +85,7 @@ pip install -r requirements.txt
 - RAG 配置：`config/rag_config.yml`
 - Agent 配置：`config/agent_model_config.yml`
 
-当前仓库验证过的本地模型组合为 `ollama/qwen3:8b`（LLM）和 `ollama/bge-m3`（embedding）。
+当前仓库验证过的本地模型组合为 `ollama/qwen3.5:9b`（LLM）和 `ollama/bge-m3`（embedding）。默认 Agent 绑定仍保持确定性关闭状态；需要启用真实模型时，修改 `config/agent_model_config.yml` 中对应 `bindings`。
 
 ### 3. 初始化状态、知识库与 MOD
 
@@ -115,6 +105,25 @@ uv run python tools/mod_manager.py scan
 
 ### 4. 启动服务
 
+Windows 下推荐使用一键启动脚本：
+
+```powershell
+.\start.ps1 -Mode dev
+```
+
+常用模式：
+
+```powershell
+.\start.ps1 -CheckOnly -SkipInstall -NoBrowser
+.\start.ps1 -Mode dev -SkipInstall
+.\start.ps1 -Mode dist -SkipInstall
+start.bat -Mode dev
+```
+
+脚本会检查项目结构、选择 Python/npm、按需构建前端、启动 Flask/Vite，并把服务日志写入 `logs/start/`。
+
+也可以直接启动 Flask：
+
 ```bash
 uv run python app.py
 ```
@@ -131,13 +140,16 @@ uv run python app.py
 ```bash
 npm install
 npm run dev
+npm run typecheck
+npm test
 npm run build
 ```
 
 进一步说明：
 
 - 玩家游玩流程见 [PLAY_GUIDE.md](PLAY_GUIDE.md)。
-- `/app` 是当前推荐试玩入口，支持 Story Pack 选择、预览、导入和非官方包删除；`/play` 保留用于兼容、对照和调试验收。
+- `/app` 是当前推荐试玩入口，支持 Story Pack 选择、预览、导入、删除、创建会话、继续会话和会话历史恢复；`/play` 保留用于兼容、对照和调试验收。
+- 调试面板仍保留 Trace、request_id、SSE event、状态日志和内存信息；普通玩家视图会隐藏内部 hash/API 字段。
 
 ## 常用开发命令
 
@@ -158,11 +170,26 @@ python state/tools/db_initializer.py
 
 ```bash
 python -m tools.packs.validate examples/story_packs/demo_a2_core
+python -m tools.packs.validate story_packs/echoes_under_red_lantern
 python examples/demo_playthrough.py
 ```
 
 `/app` 可选择用户导入的 pack 创建会话，也可导入 JSON 文件集合形式的自定义 pack。
 - 修改 `state/models/` 或 `state/data/` 后需要重建本地状态库。
+
+### A2-Release 试玩验收
+
+下面命令覆盖示例包 UI 试玩、外部 JSON pack 导入、坏包拒绝、创建会话、16 回合推进、删除 pack 后保留旧会话历史等 Release 关键路径：
+
+```powershell
+Push-Location frontend
+npm run playtest:red-lantern
+npm run playtest:a2-release-import
+Pop-Location
+
+python -m tools.logs.check_runtime_logs --since-minutes 120
+git diff --check
+```
 
 ### 导入知识库并重建索引
 
@@ -250,7 +277,7 @@ python -m tools.logs.replay_outer_outbox --limit 50
 ```yaml
 llm:
   provider: "ollama"
-  model: "qwen3:8b"
+  model: "qwen3.5:9b"
   base_url: "http://localhost:11434"
 
 embedding:
@@ -386,8 +413,15 @@ uv run python app.py
 ## API 概览
 
 - 创建会话：`POST /api/sessions`
+- 查询会话：`GET /api/sessions`、`GET /api/sessions/{session_id}`
+- 删除会话：`DELETE /api/sessions/{session_id}`
 - 普通回合：`POST /api/sessions/{session_id}/turns`
 - SSE 流式回合：`POST /api/sessions/{session_id}/turns/stream`
+- Story Pack 列表：`GET /api/story-packs`
+- Story Pack 详情：`GET /api/story-packs/{pack_id}`
+- Story Pack 导入：`POST /api/story-packs`
+- Story Pack 删除：`DELETE /api/story-packs/{pack_id}`
+- 会话运行态重置：`POST /api/sessions/{session_id}/reset`
 
 ## 主要目录与入口
 
@@ -397,11 +431,13 @@ uv run python app.py
 - `game_workflows/`：主循环、外环桥接、RAG 只读桥和场景辅助逻辑
 - `state/`：Pydantic 数据契约、种子数据、SQLite 初始化与运行期 schema
 - `tools/`：确定性工具、RAG 导入、MOD 管理、日志验收和补偿重放工具
-- `web_api/`：Flask 契约 API、Blueprint 和 `/play` 页面入口
+- `web_api/`：Flask 契约 API、Blueprint、Story Pack 管理和 `/app` / `/play` 页面入口
 - `mods/`：MOD 扩展与脚本
 - `static/`：legacy playground 前端脚本与样式
 - `templates/`：Flask 页面模板
 - `frontend/`：React + Vite + TypeScript 前端工程，入口为 `/app`
+- `story_packs/`：运行时可选择的本地 Story Pack，例如「赤灯下的回声」
+- `examples/story_packs/`：外部示例 Story Pack 和演示材料
 - `tests/`：pytest 回归测试
 - `docs/`：本地规则书与设定文档输入目录，默认被 Git 忽略
 - `knowledge_base/`：RAG 向量与图谱索引输出目录
@@ -412,12 +448,12 @@ uv run python app.py
 ## 已知限制
 
 - `/app`（React）与 `/play`（legacy）当前并行存在，接口契约一致，但展示层与调试呈现不完全相同。
-- `/app` 顶部工具栏与场景卡片当前已去重：`新会话` / `加载` 只保留在顶部工具栏。
 - `/app` 角色状态卡以创建或加载会话后的后端返回为准；未建会话前显示占位值 `--`。
 - `/app` 角色状态摘要与状态标签由后端 `active_character.status_summary/status_effects/state_flags/status_context` 提供，前端只展示，不推断状态。
 - `/app` 调试控制台采用固定“上下结构”：上方为 `状态 / Trace / 日志 / 内存` Tabs，下方为对应功能区。
 - A1 页面直接暴露 `并入主线` / `回滚沙盒` 按钮，但普通新会话默认不是沙盒分支。
 - 任务脚本判定链路已改为 AST 白名单表达式求值，但该实现仍不是强安全沙箱；生产环境仍需保证脚本来源可信。
+- Story Pack 删除只删除本地包内容，不删除历史会话；旧会话继续保留创建时冻结的 pack 元数据。
 
 ## 贡献指南
 
@@ -472,5 +508,5 @@ python -m tools.logs.check_runtime_logs
 
 ## 版本信息
 
-- 当前版本：A2-Release 开发态（Story Pack 管理与演示收口）
+- 当前版本：A2-Release 可试玩交付态（Story Pack 管理、会话持久化、玩家化 `/app` 与回归验收脚本已收口）
 - 更新日志：见 [CHANGELOG.md](CHANGELOG.md)

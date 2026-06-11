@@ -2,6 +2,27 @@
 
 本文件记录 TRE / llmtre 的用户可见变化、发布门禁和重要兼容说明。
 
+## [0.1.0-a2-release] - 2026-06-12
+
+### Added
+
+- 新增本地可试玩 Story Pack `story_packs/echoes_under_red_lantern/`（“赤灯下的回声”），覆盖 6 个场景、11 个交互、1 条轻任务、12 个触发器和 4 个媒体资产。
+- 新增 `/app` 发布期剧本管理能力：Story Pack 选择、预览、JSON 文件集合导入、删除、创建会话、继续会话和会话级历史恢复。
+- 新增 Story Pack 资产读取与展示链路，支持 manifest 声明的 image/gif/audio/video 物料，并保持前端只展示、不执行规则写入的边界。
+- 新增前端 Release playtest 脚本：`npm run playtest:red-lantern` 与 `npm run playtest:a2-release-import`。
+- 新增会话列表、会话详情、会话删除和会话运行态 reset 的玩家流程文档入口。
+
+### Changed
+
+- `/app` 玩家视图改为围绕当前剧本、场景、目标、行动分组、回合记录、任务、状态、背包、媒体和调试面板组织。
+- Story Pack 删除语义更新为删除本地 pack 内容目录，不删除历史会话；旧会话继续保留创建时冻结的 pack 元数据。
+- 当前验证过的本地模型组合更新为 `ollama/qwen3.5:9b`（LLM）和 `ollama/bge-m3`（embedding），默认 Agent 绑定仍保持 deterministic/off。
+- README、游玩指南与英文入口同步到 A2-Release 可试玩交付态。
+
+### Verification Notes
+
+- 发布文档推荐执行 `python -m tools.packs.validate story_packs/echoes_under_red_lantern`、`npm run playtest:red-lantern`、`npm run playtest:a2-release-import`、`python -m tools.logs.check_runtime_logs --since-minutes 120` 和 `git diff --check`。
+
 ## [0.1.0-a2] - 2026-05-09
 
 ### Added
