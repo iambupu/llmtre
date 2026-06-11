@@ -1,3 +1,7 @@
+"""
+功能：覆盖 check runtime logs a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -69,11 +73,16 @@ def test_read_log_lines_filters_by_since_minutes(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    assert check_runtime_logs._read_log_lines(log_path, since_minutes=0) == log_path.read_text(  # noqa: SLF001
-        encoding="utf-8"
-    ).splitlines()
-    assert check_runtime_logs._read_log_lines(log_path, since_minutes=5) == [recent_line]  # noqa: SLF001
-    assert check_runtime_logs._read_log_lines(tmp_path / "missing.log", since_minutes=0) == []  # noqa: SLF001
+    assert (
+        check_runtime_logs._read_log_lines(log_path, since_minutes=0)
+        == log_path.read_text(encoding="utf-8").splitlines()  # noqa: SLF001
+    )
+    assert check_runtime_logs._read_log_lines(log_path, since_minutes=5) == [
+        recent_line
+    ]  # noqa: SLF001
+    assert (
+        check_runtime_logs._read_log_lines(tmp_path / "missing.log", since_minutes=0) == []
+    )  # noqa: SLF001
 
 
 def test_check_rule_reports_missing_file_ok_and_missing_evidence(tmp_path) -> None:
@@ -101,6 +110,37 @@ def test_check_rule_reports_missing_file_ok_and_missing_evidence(tmp_path) -> No
     ok, messages = check_runtime_logs._check_rule(tmp_path, rule, 0)  # noqa: SLF001
     assert ok is True
     assert messages == ["main_loop.log: OK"]
+
+
+def test_check_rule_allows_lifetime_evidence_outside_recent_window(tmp_path) -> None:
+    """
+    功能：验证启动类生命周期日志可早于近期窗口，而回合运行证据仍必须位于近期窗口。
+    入参：tmp_path。
+    出参：None。
+    异常：断言失败表示长运行服务的日志验收语义回归。
+    """
+    rule = check_runtime_logs.LogCheckRule(
+        "event_bus.log",
+        ("事件触发", "写计划开始", "写计划事务已提交"),
+        lifetime_contain=("事件总线已就绪",),
+    )
+    log_path = tmp_path / "event_bus.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                _line(-30, "事件总线已就绪"),
+                _line(0, "事件触发"),
+                _line(0, "写计划开始"),
+                _line(0, "写计划事务已提交"),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ok, messages = check_runtime_logs._check_rule(tmp_path, rule, since_minutes=5)  # noqa: SLF001
+
+    assert ok is True
+    assert messages == ["event_bus.log: OK"]
 
 
 def test_main_returns_zero_and_prints_ok_for_complete_logs(

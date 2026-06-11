@@ -1,3 +1,7 @@
+"""
+功能：覆盖 health playground a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import pytest
@@ -56,3 +60,26 @@ def test_playground_page_propagates_missing_template(tmp_path) -> None:
 
     with pytest.raises(TemplateNotFound, match="playground.html"):
         app.test_client().get("/play")
+
+
+def test_app_page_accepts_optional_trailing_slash(tmp_path) -> None:
+    """
+    功能：验证正式 React 入口同时接受 `/app` 与 `/app/`，避免一键启动或手输 URL 因尾斜杠 404。
+    入参：tmp_path，用于提供最小 Flask template 目录。
+    出参：None。
+    异常：断言失败表示正式前端入口路由兼容性回归。
+    """
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir()
+    (template_dir / "app_bootstrap.html").write_text("<main>App Bootstrap</main>", encoding="utf-8")
+    app = Flask(__name__, template_folder=str(template_dir))
+    app.register_blueprint(playground_blueprint)
+
+    client = app.test_client()
+    without_slash = client.get("/app")
+    with_slash = client.get("/app/")
+    with_slash_body = with_slash.get_data(as_text=True)
+
+    assert without_slash.status_code == 200
+    assert with_slash.status_code == 200
+    assert "<html" in with_slash_body.lower() or "App Bootstrap" in with_slash_body

@@ -1,13 +1,53 @@
+"""
+功能：覆盖 outer loop bridge 的回归测试。
+"""
+
 import asyncio
 import logging
 import sqlite3
+from pathlib import Path
 
 from game_workflows.async_watchers import GlobalEventWorkflow, WorkflowOuterLoopBridge
 from game_workflows.event_schemas import StateChangedEvent, TurnEndedEvent, WorldEvolutionEvent
 from tools.sqlite_db.db_updater import DBUpdater
 
 
+def _seed_entity_table(db_path: Path) -> None:
+    """
+    功能：为外环成就奖励测试创建最小实体状态表。
+    入参：db_path（Path）：测试数据库路径。
+    出参：None。
+    异常：sqlite 建表或写入失败时直接抛出，交由测试失败暴露。
+    """
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS entities_active (
+                entity_id TEXT PRIMARY KEY,
+                hp INTEGER NOT NULL,
+                max_hp INTEGER NOT NULL,
+                mp INTEGER NOT NULL,
+                max_mp INTEGER NOT NULL,
+                current_location_id TEXT NOT NULL,
+                state_flags_json TEXT NOT NULL DEFAULT '[]',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+        conn.execute("""
+            INSERT OR REPLACE INTO entities_active(
+                entity_id, hp, max_hp, mp, max_mp, current_location_id, state_flags_json
+            )
+            VALUES ('player_01', 10, 10, 0, 5, 'ferry_landing', '[]')
+            """)
+        conn.commit()
+
+
 def test_workflow_outer_loop_bridge_turn_event_runs():
+    """
+    功能：验证 workflow outer loop bridge turn event runs 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     bridge = WorkflowOuterLoopBridge()
     result = asyncio.run(
         bridge.emit_turn_ended(
@@ -22,7 +62,14 @@ def test_workflow_outer_loop_bridge_turn_event_runs():
 
 
 def test_workflow_outer_loop_bridge_state_event_can_trigger_achievement(tmp_path):
+    """
+    功能：验证 workflow outer loop bridge state event can trigger achievement 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
+    _seed_entity_table(db_path)
     bridge = WorkflowOuterLoopBridge(
         workflow=GlobalEventWorkflow(timeout=60, verbose=False, db_path=str(db_path))
     )
@@ -39,7 +86,14 @@ def test_workflow_outer_loop_bridge_state_event_can_trigger_achievement(tmp_path
 
 
 def test_workflow_outer_loop_bridge_achievement_is_deduplicated(tmp_path):
+    """
+    功能：验证 workflow outer loop bridge achievement is deduplicated 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
+    _seed_entity_table(db_path)
     workflow = GlobalEventWorkflow(timeout=60, verbose=False, db_path=str(db_path))
     bridge = WorkflowOuterLoopBridge(workflow=workflow)
     first = asyncio.run(
@@ -66,7 +120,14 @@ def test_workflow_outer_loop_bridge_achievement_is_deduplicated(tmp_path):
 
 
 def test_workflow_outer_loop_bridge_achievement_dedup_persists_with_db(tmp_path):
+    """
+    功能：验证 workflow outer loop bridge achievement dedup persists with db 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
+    _seed_entity_table(db_path)
     workflow_1 = GlobalEventWorkflow(timeout=60, verbose=False, db_path=str(db_path))
     bridge_1 = WorkflowOuterLoopBridge(workflow=workflow_1)
     first = asyncio.run(
@@ -105,12 +166,12 @@ def test_workflow_outer_loop_bridge_achievement_dedup_persists_with_db(tmp_path)
     assert int(count) == 1
 
 
-def test_workflow_outer_loop_reward_without_entity_table_does_not_warn(tmp_path, caplog):
+def test_workflow_outer_loop_reward_without_entity_table_does_not_mark_unlocked(tmp_path, caplog):
     """
-    功能：验证外环成就奖励在最小运行库缺少实体表时按降级跳过，不产生噪声警告。
+    功能：验证外环成就奖励在缺少实体表时不会先标记成就解锁。
     入参：tmp_path；caplog。
     出参：None。
-    异常：断言失败表示外环奖励写入降级策略回归。
+    异常：断言失败表示奖励失败后成就去重或补偿语义回归。
     """
     db_path = tmp_path / "tre_state.db"
     workflow = GlobalEventWorkflow(timeout=60, verbose=False, db_path=str(db_path))
@@ -128,10 +189,28 @@ def test_workflow_outer_loop_reward_without_entity_table_does_not_warn(tmp_path,
         )
 
     assert "first_blood" in str(result)
-    assert "外环成就奖励写入失败" not in caplog.text
+    assert "reward failed" in str(result)
+    assert "外环成就奖励写入失败（未解锁）" in caplog.text
+    with sqlite3.connect(str(db_path)) as conn:
+        count = conn.execute(
+            """
+            SELECT COUNT(1)
+            FROM achievement_unlocks
+            WHERE entity_id = ? AND achievement_id = ?
+            """,
+            ("player_01", "first_blood"),
+        ).fetchone()[0]
+    assert int(count) == 0
+    assert workflow._mark_achievement_once("player_01", "first_blood") is True
 
 
 def test_workflow_outer_loop_bridge_world_evolution_updates_world_state(tmp_path):
+    """
+    功能：验证 workflow outer loop bridge world evolution updates world state 场景。
+    入参：按函数签名接收 pytest fixture 或测试辅助参数。
+    出参：None；通过断言表达测试结果。
+    异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+    """
     db_path = tmp_path / "tre_state.db"
     workflow = GlobalEventWorkflow(timeout=60, verbose=False, db_path=str(db_path))
     bridge = WorkflowOuterLoopBridge(workflow=workflow)

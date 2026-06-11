@@ -1,3 +1,7 @@
+"""
+功能：提供主循环 RAG 只读上下文的烟测脚本。
+"""
+
 import os
 from typing import Any
 

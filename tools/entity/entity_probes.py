@@ -1,3 +1,7 @@
+"""
+功能：提供主循环只读查询角色、物品、背包和位置状态的实体探针。
+"""
+
 import json
 import logging
 import os
@@ -7,6 +11,7 @@ from typing import Any, cast
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 DB_PATH = os.path.join(BASE_DIR, "state", "core_data", "tre_state.db")
 logger = logging.getLogger("EntityProbes")
+
 
 class EntityProbes:
     """只读状态探针：供 Agent 安全查询游戏现状"""
@@ -65,12 +70,20 @@ class EntityProbes:
             with self._get_conn() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                cursor.execute(f"""
-                    SELECT i.item_id, i.quantity, t.name, t.description, t.item_type
+                cursor.execute(
+                    f"""
+                    SELECT
+                        i.item_id,
+                        i.quantity,
+                        COALESCE(t.name, i.item_id) AS name,
+                        COALESCE(t.description, '') AS description,
+                        COALESCE(t.item_type, 'unknown') AS item_type
                     FROM {table} i
-                    JOIN items t ON i.item_id = t.item_id
+                    LEFT JOIN items t ON i.item_id = t.item_id
                     WHERE i.owner_id = ?
-                """, (entity_id,))
+                """,
+                    (entity_id,),
+                )
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as exc:
             logger.warning("背包探针读取失败: entity_id=%s error=%s", entity_id, exc)

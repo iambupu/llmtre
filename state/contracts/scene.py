@@ -21,7 +21,7 @@ class SceneObjectRef(BaseModel):
     """
 
     object_id: str
-    object_type: Literal["exit", "npc", "item", "location", "system"]
+    object_type: Literal["exit", "npc", "item", "location", "interaction", "system"]
     label: str
     description: str = ""
     state_tags: list[str] = Field(default_factory=list)
@@ -86,6 +86,7 @@ class SceneSnapshotV2(BaseModel):
     schema_version: Literal["scene_snapshot.v2"] = "scene_snapshot.v2"
     current_location: dict[str, Any] = Field(default_factory=dict)
     exits: list[dict[str, Any]] = Field(default_factory=list)
+    interactables: list[dict[str, Any]] = Field(default_factory=list)
     visible_npcs: list[dict[str, Any]] = Field(default_factory=list)
     visible_items: list[dict[str, Any]] = Field(default_factory=list)
     active_quests: list[dict[str, Any]] = Field(default_factory=list)

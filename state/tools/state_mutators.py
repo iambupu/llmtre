@@ -1,3 +1,8 @@
+"""
+功能：封装状态写入操作并确保通过事件总线事务边界执行。
+"""
+
+import logging
 import os
 import sqlite3
 from typing import Any
@@ -6,6 +11,9 @@ from state.models.action import ActionEffect, ActionTemplate, EffectType
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 DB_PATH = os.path.join(BASE_DIR, "state", "core_data", "tre_state.db")
+logger = logging.getLogger(__name__)
+_RESOURCE_COLUMNS = {"hp": "hp", "mp": "mp"}
+
 
 class StateMutators:
     """受控写入器：封装所有状态变更逻辑，确保原子化和确定性"""
@@ -31,9 +39,10 @@ class StateMutators:
     def apply_action(self, action: ActionTemplate, use_shadow: bool = False) -> bool:
         """
         功能：应用一个完整的原子化动作。
-        入参：action；use_shadow。
-        出参：bool。
-        异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+        入参：action（ActionTemplate）：待执行动作，success_effects 会在同一事务内顺序执行；
+            use_shadow（bool，默认 False）：为 True 时写 Shadow 表，否则写 Active 表。
+        出参：bool，全部效果提交成功返回 True；前置条件失败或任一效果失败返回 False。
+        异常：效果执行异常会被捕获，事务回滚并记录错误日志；数据库连接失败仍向上抛出。
         """
         # 1. 验证前置条件 (简易演示)
         if not self._verify_preconditions(action.pre_conditions):
@@ -49,7 +58,7 @@ class StateMutators:
                 return True
             except Exception as e:
                 conn.rollback()
-                print(f"Action execution failed: {e}")
+                logger.exception("动作执行失败，已回滚事务: %s", e)
                 return False
 
     def _verify_preconditions(self, pre_conditions: list[dict[str, Any]]) -> bool:
@@ -73,20 +82,27 @@ class StateMutators:
         入参：cursor（sqlite3.Cursor）：当前事务游标；effect（ActionEffect）：动作效果；
             use_shadow（bool）：为 True 时写 Shadow 表，默认 False 写 Active 表。
         出参：None。
-        异常：SQL 执行失败抛出 sqlite3.Error；由 `apply_action` 统一捕获并回滚事务。
+        异常：不支持的资源字段抛出 ValueError；SQL 执行失败抛出 sqlite3.Error；
+            均由 `apply_action` 统一捕获并回滚事务。
         """
         ent_table = "entities_shadow" if use_shadow else "entities_active"
         inv_table = "inventory_shadow" if use_shadow else "inventory_active"
 
         if effect.effect_type == EffectType.RESOURCE_CHANGE:
-            attr = effect.parameters.get("attribute")
+            attr_key = str(effect.parameters.get("attribute") or "")
+            attr = _RESOURCE_COLUMNS.get(attr_key)
+            if attr is None:
+                raise ValueError(f"不支持的资源字段: {attr_key}")
             value = effect.parameters.get("value", 0)
-            # 安全更新 HP/MP
-            cursor.execute(f"""
+            # 资源列名来自白名单，数值与目标实体仍走参数绑定，避免动态效果污染 SQL。
+            cursor.execute(
+                f"""
                 UPDATE {ent_table}
                 SET {attr} = MAX(0, MIN(max_{attr}, {attr} + ?))
                 WHERE entity_id = ?
-            """, (value, effect.target_id))
+            """,
+                (value, effect.target_id),
+            )
 
         elif effect.effect_type == EffectType.ITEM_TRANSFER:
             from_id = effect.parameters.get("from_id")
@@ -95,16 +111,22 @@ class StateMutators:
             qty = effect.parameters.get("quantity", 1)
 
             # 扣除来源
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 UPDATE {inv_table} SET quantity = quantity - ?
                 WHERE owner_id = ? AND item_id = ?
-            """, (qty, from_id, item_id))
+            """,
+                (qty, from_id, item_id),
+            )
             # 增加去向
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 INSERT INTO {inv_table} (owner_id, item_id, quantity)
                 VALUES (?, ?, ?)
                 ON CONFLICT(owner_id, item_id) DO UPDATE SET quantity = quantity + ?
-            """, (to_id, item_id, qty, qty))
+            """,
+                (to_id, item_id, qty, qty),
+            )
 
     def modify_hp(self, entity_id: str, amount: int, use_shadow: bool = False) -> bool:
         """
@@ -116,10 +138,13 @@ class StateMutators:
         table = "entities_shadow" if use_shadow else "entities_active"
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 UPDATE {table}
                 SET hp = MAX(0, MIN(max_hp, hp + ?))
                 WHERE entity_id = ?
-            """, (amount, entity_id))
+            """,
+                (amount, entity_id),
+            )
             conn.commit()
             return int(cursor.rowcount) > 0

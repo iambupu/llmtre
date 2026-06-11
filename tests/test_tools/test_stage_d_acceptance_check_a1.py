@@ -1,3 +1,7 @@
+"""
+功能：覆盖 stage d acceptance check a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +30,12 @@ class _FakeResponse:
         *,
         raise_json: bool = False,
     ) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.status_code = status_code
         self._body = body
         self._raise_json = raise_json
@@ -51,6 +61,12 @@ class _FakeClient:
     """
 
     def __init__(self, session_id: str = "sess_stage_d01", initial_turn: int = 0) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.session_id = session_id
         self.turn_counter = initial_turn
         self.posts: list[tuple[str, dict[str, Any]]] = []
@@ -117,6 +133,12 @@ class _FakeApp:
     """
 
     def __init__(self, client: _FakeClient) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self._client = client
         self.extensions = {
             "tre_api_context": SimpleNamespace(

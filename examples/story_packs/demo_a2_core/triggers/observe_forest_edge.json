@@ -1,0 +1,15 @@
+{
+  "trigger_id": "observe_forest_edge",
+  "type": "observe",
+  "label": "观察雾林边缘",
+  "description": "玩家在雾林边缘使用观察动作时触发，揭示隐藏的环境线索。",
+  "effects": [
+    "narrative"
+  ],
+  "conditions": {
+    "scene_id": "forest_edge",
+    "narrative_text": "你仔细观察周围，发现被雾水浸湿的路标上刻着两个方向——北去营地，东去石门。路标底部还有一行小字：「守林人每三日巡此路。」",
+    "memory_text": "雾林边缘的路标指向废弃营地和石制遗迹门，守林人定期巡视此路。"
+  },
+  "once": false
+}

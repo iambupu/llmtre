@@ -1,3 +1,7 @@
+"""
+功能：覆盖 replay outer outbox a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -16,22 +20,46 @@ class _CollectingBridge:
     """
 
     def __init__(self, fail_event: str | None = None) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.fail_event = fail_event
         self.state_events: list[Any] = []
         self.turn_events: list[Any] = []
         self.world_events: list[Any] = []
 
     async def emit_state_changed(self, event: Any) -> None:
+        """
+        功能：提供 emit state changed 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if self.fail_event == "state_changed":
             raise RuntimeError("state failed")
         self.state_events.append(event)
 
     async def emit_turn_ended(self, event: Any) -> None:
+        """
+        功能：提供 emit turn ended 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if self.fail_event == "turn_ended":
             raise RuntimeError("turn failed")
         self.turn_events.append(event)
 
     async def emit_world_evolution(self, event: Any) -> None:
+        """
+        功能：提供 emit world evolution 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if self.fail_event == "world_evolution":
             raise RuntimeError("world failed")
         self.world_events.append(event)
@@ -49,6 +77,12 @@ class _FakeUpdater:
     last_instance: _FakeUpdater | None = None
 
     def __init__(self) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.delivered: list[int] = []
         self.failed: list[dict[str, Any]] = []
         self.reserve_args: dict[str, Any] = {}
@@ -59,6 +93,12 @@ class _FakeUpdater:
         limit: int,
         processing_timeout_seconds: int,
     ) -> list[dict[str, Any]]:
+        """
+        功能：提供 reserve pending outer events 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.reserve_args = {
             "limit": limit,
             "processing_timeout_seconds": processing_timeout_seconds,
@@ -66,6 +106,12 @@ class _FakeUpdater:
         return list(self.rows)
 
     def mark_outer_event_delivered(self, event_id: int) -> None:
+        """
+        功能：提供 mark outer event delivered 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.delivered.append(event_id)
 
     def mark_outer_event_failed(
@@ -75,6 +121,12 @@ class _FakeUpdater:
         max_attempts: int,
         base_backoff_seconds: int,
     ) -> None:
+        """
+        功能：提供 mark outer event failed 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.failed.append(
             {
                 "event_id": event_id,
@@ -129,7 +181,9 @@ async def test_dispatch_rejects_invalid_payload_fields() -> None:
     bridge = _CollectingBridge()
 
     with pytest.raises(ValueError, match="state_changed.diff 必须是字典"):
-        await replay_outer_outbox._dispatch(bridge, "state_changed", {"entity_id": "player_01"})  # noqa: SLF001
+        await replay_outer_outbox._dispatch(
+            bridge, "state_changed", {"entity_id": "player_01"}
+        )  # noqa: SLF001
     with pytest.raises(ValueError, match="turn_id 无法转换为整数"):
         await replay_outer_outbox._dispatch(  # noqa: SLF001
             bridge,

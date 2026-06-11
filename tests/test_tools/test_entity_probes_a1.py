@@ -1,3 +1,7 @@
+"""
+功能：覆盖 entity probes a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -17,8 +21,7 @@ def _init_probe_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         for table in ("entities_active", "entities_shadow"):
-            cursor.execute(
-                f"""
+            cursor.execute(f"""
                 CREATE TABLE {table} (
                     entity_id TEXT PRIMARY KEY,
                     name TEXT,
@@ -26,28 +29,22 @@ def _init_probe_db(db_path: Path) -> None:
                     hp INTEGER,
                     current_location_id TEXT
                 )
-                """
-            )
-        cursor.execute(
-            """
+                """)
+        cursor.execute("""
             CREATE TABLE inventory_active (
                 owner_id TEXT,
                 item_id TEXT,
                 quantity INTEGER
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE inventory_shadow (
                 owner_id TEXT,
                 item_id TEXT,
                 quantity INTEGER
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE items (
                 item_id TEXT PRIMARY KEY,
                 name TEXT,
@@ -57,24 +54,19 @@ def _init_probe_db(db_path: Path) -> None:
                 hooks_json TEXT,
                 is_stackable INTEGER
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE world_state_active (
                 key TEXT PRIMARY KEY,
                 value_json TEXT
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE world_state_shadow (
                 key TEXT PRIMARY KEY,
                 value_json TEXT
             )
-            """
-        )
+            """)
         cursor.execute(
             "INSERT INTO entities_active VALUES (?, ?, ?, ?, ?)",
             ("player_01", "玩家", "player", 10, "road"),
@@ -149,6 +141,36 @@ def test_entity_probes_read_stats_inventory_item_location_and_nearby(tmp_path: P
     assert item_definition["hooks"] == {"on_use": "heal"}
     assert location == {"name": "道路"}
     assert {row["entity_id"] for row in nearby} == {"player_01", "npc_01"}
+
+
+def test_entity_probes_keeps_inventory_items_without_static_definition(
+    tmp_path: Path,
+) -> None:
+    """
+    功能：验证动态/剧本包物品缺少静态 items 定义时仍会出现在背包探针结果中。
+    入参：tmp_path。
+    出参：None。
+    异常：断言失败表示 pack 触发器授予物品的读取路径退化。
+    """
+    db_path = tmp_path / "probes_dynamic_inventory.db"
+    _init_probe_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO inventory_active VALUES (?, ?, ?)",
+            ("player_01", "pack_letter", 1),
+        )
+        conn.commit()
+
+    probes = EntityProbes(str(db_path))
+    item = probes.get_inventory_item("player_01", "pack_letter")
+
+    assert item == {
+        "item_id": "pack_letter",
+        "quantity": 1,
+        "name": "pack_letter",
+        "description": "",
+        "item_type": "unknown",
+    }
 
 
 def test_entity_probes_missing_rows_and_empty_inventory_return_none_or_empty(

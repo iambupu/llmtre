@@ -5,6 +5,12 @@ import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 功能：封装可滚动区域根节点与视口。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function ScrollArea({
   className,
   children,
@@ -28,6 +34,12 @@ function ScrollArea({
   )
 }
 
+/**
+ * 功能：渲染滚动区域的自定义滚动条。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function ScrollBar({
   className,
   orientation = "vertical",

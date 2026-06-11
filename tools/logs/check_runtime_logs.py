@@ -1,3 +1,7 @@
+"""
+功能：检查主循环、事件总线与外环日志是否包含近期有效记录。
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,8 +15,17 @@ LOG_TIME_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S,%f"
 
 @dataclass(frozen=True)
 class LogCheckRule:
+    """
+    功能：描述单个运行日志文件的验收规则。
+    入参：无；dataclass 字段声明文件名、近期窗口必须命中的日志片段，
+        以及允许跨越时间窗口的生命周期日志片段。
+    出参：LogCheckRule 实例，供日志检查器逐文件验证近期运行证据。
+    异常：不抛异常；缺失日志或未命中模式由检查流程返回失败结果。
+    """
+
     file_name: str
     must_contain: tuple[str, ...]
+    lifetime_contain: tuple[str, ...] = ()
 
 
 RULES: Final[tuple[LogCheckRule, ...]] = (
@@ -22,7 +35,8 @@ RULES: Final[tuple[LogCheckRule, ...]] = (
     ),
     LogCheckRule(
         file_name="event_bus.log",
-        must_contain=("事件总线已就绪", "事件触发", "写计划开始", "写计划事务已提交"),
+        must_contain=("事件触发", "写计划开始", "写计划事务已提交"),
+        lifetime_contain=("事件总线已就绪",),
     ),
     LogCheckRule(
         file_name="outer_loop.log",
@@ -96,13 +110,15 @@ def _read_log_lines(log_path: Path, since_minutes: int) -> list[str]:
 
 def _check_rule(log_dir: Path, rule: LogCheckRule, since_minutes: int) -> tuple[bool, list[str]]:
     """
-    功能：执行 `_check_rule` 相关业务逻辑。
-    入参：log_dir；rule；since_minutes。
-    出参：tuple[bool, list[str]]。
-    异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
+    功能：检查单个日志文件是否同时满足近期运行证据与生命周期证据。
+    入参：log_dir（Path）：日志目录；rule（LogCheckRule）：检查规则；
+        since_minutes（int）：近期窗口，0 表示不限制。
+    出参：tuple[bool, list[str]]，bool 表示是否通过，list 为可展示诊断。
+    异常：不主动捕获文件读取异常；日志文件损坏或权限错误会向上抛出，避免误报通过。
     """
     path = log_dir / rule.file_name
     lines = _read_log_lines(path, since_minutes)
+    all_lines = lines if since_minutes <= 0 else _read_log_lines(path, 0)
     if not lines:
         return False, [f"{rule.file_name}: 无可用日志（文件缺失或时间窗口内无记录）"]
 
@@ -110,6 +126,11 @@ def _check_rule(log_dir: Path, rule: LogCheckRule, since_minutes: int) -> tuple[
     for keyword in rule.must_contain:
         if not any(keyword in line for line in lines):
             errors.append(f"{rule.file_name}: 缺少关键证据 -> {keyword}")
+    for keyword in rule.lifetime_contain:
+        # 进程启动类日志不会在每个 since_minutes 窗口重复出现；
+        # 只要当前日志文件中存在即可证明组件完成过初始化。
+        if not any(keyword in line for line in all_lines):
+            errors.append(f"{rule.file_name}: 缺少生命周期证据 -> {keyword}")
 
     if errors:
         return False, errors
@@ -150,4 +171,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

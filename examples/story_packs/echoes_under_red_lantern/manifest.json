@@ -1,0 +1,47 @@
+{
+  "pack_id": "echoes_under_red_lantern",
+  "version": "0.1.0",
+  "title": "赤灯下的回声",
+  "author": "TRE Example Pack",
+  "scenario_id": "default",
+  "start_scene_id": "ferry_landing",
+  "supported_actions": ["observe", "move", "talk", "inspect", "wait"],
+  "lore_files": ["setting.md"],
+  "assets": {
+    "ferry_landing_bg": {
+      "kind": "background",
+      "media_type": "image",
+      "src": "images/ferry_landing.png",
+      "alt": "雾中赤灯码头背景"
+    },
+    "boatman_ren_portrait": {
+      "kind": "npc_portrait",
+      "media_type": "gif",
+      "src": "images/boatman_ren.gif",
+      "alt": "船夫任伯的剪影"
+    },
+    "tide_notice_chime": {
+      "kind": "ui",
+      "media_type": "audio",
+      "src": "audio/tide_notice.wav",
+      "alt": "潮汐告示旁的短促铃声",
+      "playback": {
+        "mode": "manual",
+        "controls": true,
+        "preload": "metadata",
+        "volume": 0.4
+      }
+    },
+    "red_lantern_reflection_anim": {
+      "kind": "item_icon",
+      "media_type": "gif",
+      "src": "images/red_lantern_reflection.gif",
+      "alt": "水面中晃动的赤灯倒影"
+    }
+  },
+  "rules_overlay": {
+    "narrative_style": "悬疑、克制、重视物证和目击证词",
+    "intended_playtime_minutes": 25,
+    "completion_hint": "跟随码头告示、旧账册、静默钟和水镜四组线索，抵达晓桥完成主线。"
+  }
+}

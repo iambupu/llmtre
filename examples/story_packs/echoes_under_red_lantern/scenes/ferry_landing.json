@@ -1,0 +1,56 @@
+{
+  "scene_id": "ferry_landing",
+  "display_name": "鹭潮渡口",
+  "summary": "潮水贴着青石码头缓慢退去，赤灯在雾里提前亮起，像有人在河面另一侧等候。船夫任伯守着空船，旁边钉着一张被盐霜卷边的潮汐告示。",
+  "background_asset_id": "ferry_landing_bg",
+  "exits": [
+    {
+      "target_scene_id": "red_lantern_lane",
+      "label": "沿赤灯巷进镇",
+      "aliases": ["赤灯巷", "巷子", "进镇", "西"]
+    },
+    {
+      "target_scene_id": "ledgers_room",
+      "label": "前往旧账房",
+      "aliases": ["账房", "旧账房", "账册", "北"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_tide_notice",
+      "label": "检查潮汐告示",
+      "kind": "inspect",
+      "target_ref": "tide_notice",
+      "aliases": ["告示", "潮汐告示", "盐霜告示"]
+    },
+    {
+      "interaction_id": "talk_boatman_ren",
+      "label": "询问船夫任伯",
+      "kind": "talk",
+      "target_ref": "boatman_ren",
+      "aliases": ["任伯", "船夫", "老船夫"]
+    }
+  ],
+  "visible_npcs": [
+    {
+      "id": "boatman_ren",
+      "label": "船夫任伯",
+      "portrait_asset_id": "boatman_ren_portrait",
+      "aliases": ["任伯", "船夫", "老船夫"]
+    }
+  ],
+  "visible_items": [
+    {
+      "id": "tide_notice",
+      "label": "潮汐告示",
+      "asset_id": "tide_notice_chime",
+      "aliases": ["告示", "盐霜告示"]
+    },
+    {
+      "id": "red_lantern_reflection",
+      "label": "赤灯倒影",
+      "image_asset_id": "red_lantern_reflection_anim",
+      "aliases": ["赤灯", "水面倒影"]
+    }
+  ]
+}

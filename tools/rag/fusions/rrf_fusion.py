@@ -1,3 +1,7 @@
+"""
+功能：实现 RAG 多路检索结果的 RRF 融合策略。
+"""
+
 from typing import cast
 
 from llama_index.core.schema import BaseNode, NodeWithScore

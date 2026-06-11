@@ -1,6 +1,12 @@
 import { useDebugStore } from "@/stores/debugStore";
 import type { ApiFailure, ApiSuccess } from "@/types";
 
+/**
+ * 功能：表示同源 API 请求失败，并携带后端 trace 与错误码。
+ * 入参：构造函数接收 message、HTTP status、可选 traceId/code/trace。
+ * 出参：ApiError 实例，可被调用方按 Error 捕获并读取调试字段。
+ * 异常：类定义本身不抛异常；实例化只保存传入上下文。
+ */
 export class ApiError extends Error {
   status: number;
   traceId?: string;

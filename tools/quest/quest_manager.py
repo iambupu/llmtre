@@ -1,3 +1,7 @@
+"""
+功能：提供任务状态查询与推进的确定性工具层。
+"""
+
 import json
 import os
 import sqlite3
@@ -8,6 +12,7 @@ from tools.sandbox.script_evaluator import ScriptEvaluator
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 DB_PATH = os.path.join(BASE_DIR, "state", "core_data", "tre_state.db")
+
 
 class QuestManager:
     """任务管理器：负责任务状态机的维护、判定逻辑触发和进度更新"""
@@ -87,11 +92,11 @@ class QuestManager:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM {table} WHERE quest_id = ?", (quest_template.quest_id,))
             row = cursor.fetchone()
-            if not row or row['status'] != QuestStatus.IN_PROGRESS:
+            if not row or row["status"] != QuestStatus.IN_PROGRESS:
                 return
 
-            current_stage_id = row['current_stage_id']
-            progress = json.loads(row['objectives_progress_json'])
+            current_stage_id = row["current_stage_id"]
+            progress = json.loads(row["objectives_progress_json"])
 
             # 找到当前阶段模板
             current_stage = next(
@@ -182,8 +187,11 @@ class QuestManager:
             return
 
         new_progress = {obj.objective_id: False for obj in next_stage.objectives}
-        cursor.execute(f"""
+        cursor.execute(
+            f"""
             UPDATE {table}
             SET current_stage_id = ?, objectives_progress_json = ?, updated_at = CURRENT_TIMESTAMP
             WHERE quest_id = ?
-        """, (next_stage_id, json.dumps(new_progress), quest_template.quest_id))
+        """,
+            (next_stage_id, json.dumps(new_progress), quest_template.quest_id),
+        )

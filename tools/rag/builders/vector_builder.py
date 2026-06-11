@@ -1,3 +1,7 @@
+"""
+功能：构建 RAG 向量索引并维护文档向量数据。
+"""
+
 import logging
 import os
 
@@ -5,6 +9,7 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.schema import BaseNode
 
 logger = logging.getLogger("RAGManager.VectorBuilder")
+
 
 class VectorIndexBuilder:
     """向量索引专用构建器"""

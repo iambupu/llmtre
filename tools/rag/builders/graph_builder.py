@@ -1,3 +1,7 @@
+"""
+功能：构建 RAG 属性图谱索引并维护实体关系数据。
+"""
+
 import logging
 import os
 from typing import Any
@@ -6,6 +10,7 @@ from llama_index.core import Document, PropertyGraphIndex, Settings
 from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
 
 logger = logging.getLogger("RAGManager.GraphBuilder")
+
 
 class PropertyGraphIndexBuilder:
     """属性图谱专用构建器"""

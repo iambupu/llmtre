@@ -1,3 +1,7 @@
+"""
+功能：覆盖 quest manager a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -25,6 +29,12 @@ class _FakeEvaluator:
     """
 
     def __init__(self, *, python_result: bool = True, llm_result: bool = True) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.python_result = python_result
         self.llm_result = llm_result
         self.python_calls: list[tuple[str, dict[str, Any]]] = []
@@ -61,8 +71,7 @@ def _init_quest_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         for table in ("quests_active", "quests_shadow"):
-            cursor.execute(
-                f"""
+            cursor.execute(f"""
                 CREATE TABLE {table} (
                     quest_id TEXT PRIMARY KEY,
                     current_stage_id TEXT NOT NULL,
@@ -70,8 +79,7 @@ def _init_quest_db(db_path: Path) -> None:
                     objectives_progress_json TEXT NOT NULL,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
-                """
-            )
+                """)
         conn.commit()
 
 

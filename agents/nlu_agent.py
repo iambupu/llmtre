@@ -47,7 +47,9 @@ class NLUAgent:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """
-        功能：将玩家输入解析为最小结构化动作；优先使用场景快照解析模糊移动，避免产生 unknown 地点。
+        功能：将玩家输入解析为最小结构化动作；优先使用场景快照
+        exits aliases/label/direction 匹配移动目标，并检查通用移动关键词，
+        避免产生 unknown 地点（A2-Plus 场景别名优先匹配）。
         入参：user_input（str）：玩家自然语言，空白输入返回 None；
             context（dict[str, Any] | None）：角色与场景上下文，可包含 id、scene_snapshot。
         出参：dict[str, Any] | None，识别成功返回候选动作 JSON，失败返回 None。
@@ -57,32 +59,178 @@ class NLUAgent:
         if not normalized:
             return None
 
+        actor_id, scene_snapshot = self._extract_parse_context(context)
+        action_keywords = self.nlu_rules.get("action_keywords", {})
+        rule_candidate = self._parse_rule_candidate(
+            normalized,
+            user_input,
+            actor_id,
+            scene_snapshot,
+            action_keywords,
+        )
+        if rule_candidate is not None:
+            return rule_candidate
+
+        if self.llm_enabled:
+            return self._parse_with_llm(user_input, actor_id, scene_snapshot)
+        return None
+
+    def _extract_parse_context(
+        self,
+        context: dict[str, Any] | None,
+    ) -> tuple[str | None, Any]:
+        """
+        功能：从主循环上下文中提取 NLU 需要的最小只读字段。
+        入参：context（dict[str, Any] | None）：角色与场景上下文，可包含 id 与 scene_snapshot。
+        出参：tuple[str | None, Any]，依次为 actor_id 与 scene_snapshot。
+        异常：不抛异常；缺失字段按 None 降级，避免 NLU 影响主循环错误处理。
+        """
         actor_id = context["id"] if context and "id" in context else None
         scene_snapshot = context.get("scene_snapshot") if context else None
+        return actor_id, scene_snapshot
 
-        action_keywords = self.nlu_rules.get("action_keywords", {})
+    def _parse_rule_candidate(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        scene_snapshot: Any,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：按固定优先级执行确定性规则解析，失败时交由 parse 决定是否启用 LLM 兜底。
+        入参：normalized（str）：已归一化玩家输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；scene_snapshot（Any）：当前场景快照；
+            action_keywords（dict[str, Any]）：规则关键词配置。
+        出参：dict[str, Any] | None，规则命中返回候选动作，否则返回 None。
+        异常：不抛异常；各分支内部字段缺失均按已有降级逻辑处理。
+        """
+        sandbox_action = self._parse_sandbox_control_action(
+            normalized,
+            user_input,
+            actor_id,
+            action_keywords,
+            "commit_sandbox",
+        )
+        if sandbox_action is not None:
+            return sandbox_action
 
-        if self._matches_action(normalized, action_keywords, "commit_sandbox"):
-            return self._finalize_candidate({
-                "type": "commit_sandbox",
+        sandbox_action = self._parse_sandbox_control_action(
+            normalized,
+            user_input,
+            actor_id,
+            action_keywords,
+            "discard_sandbox",
+        )
+        if sandbox_action is not None:
+            return sandbox_action
+
+        explicit_inspect_action = (
+            self._parse_inspect_action(
+                normalized,
+                user_input,
+                actor_id,
+                scene_snapshot,
+                action_keywords,
+            )
+            if self._matches_action(normalized, action_keywords, "inspect")
+            else None
+        )
+
+        return (
+            self._parse_use_item_action(normalized, user_input, actor_id, action_keywords)
+            or self._parse_attack_action(
+                normalized,
+                user_input,
+                actor_id,
+                scene_snapshot,
+                action_keywords,
+            )
+            or explicit_inspect_action
+            or self._parse_talk_action(
+                normalized,
+                user_input,
+                actor_id,
+                scene_snapshot,
+                action_keywords,
+            )
+            or self._parse_move_action(
+                normalized,
+                user_input,
+                actor_id,
+                scene_snapshot,
+                action_keywords,
+            )
+            or self._parse_inspect_action(
+                normalized,
+                user_input,
+                actor_id,
+                scene_snapshot,
+                action_keywords,
+            )
+            or self._parse_interact_action(
+                normalized,
+                user_input,
+                actor_id,
+                scene_snapshot,
+                action_keywords,
+            )
+            or self._parse_simple_self_action(
+                normalized,
+                user_input,
+                actor_id,
+                action_keywords,
+            )
+        )
+
+    def _parse_sandbox_control_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        action_keywords: dict[str, Any],
+        action_type: str,
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析沙盒并入/回滚控制动作，保持其优先级高于普通玩法动作。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；action_keywords（dict[str, Any]）：关键词配置；
+            action_type（str）：commit_sandbox 或 discard_sandbox。
+        出参：dict[str, Any] | None，命中返回控制动作，否则返回 None。
+        异常：不抛异常；最终候选由 _finalize_candidate 统一校验。
+        """
+        if not self._matches_action(normalized, action_keywords, action_type):
+            return None
+        return self._finalize_candidate(
+            {
+                "type": action_type,
                 "raw_input": user_input,
                 "actor_id": actor_id,
                 "target_id": actor_id,
                 "parameters": {},
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "discard_sandbox"):
-            return self._finalize_candidate({
-                "type": "discard_sandbox",
-                "raw_input": user_input,
-                "actor_id": actor_id,
-                "target_id": actor_id,
-                "parameters": {},
-            }, user_input, actor_id)
-
-        # 物品动作优先于泛检查，避免“喝下药水”被识别为 inspect。
-        if self._matches_action(normalized, action_keywords, "use_item"):
-            return self._finalize_candidate({
+    def _parse_use_item_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析使用物品动作，避免其被后续 inspect/interact 泛规则截获。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 use_item 候选，否则返回 None。
+        异常：不抛异常；物品 ID 缺失时保留 None 交由主循环校验或澄清。
+        """
+        if not self._matches_action(normalized, action_keywords, "use_item"):
+            return None
+        return self._finalize_candidate(
+            {
                 "type": "use_item",
                 "raw_input": user_input,
                 "actor_id": actor_id,
@@ -91,31 +239,116 @@ class NLUAgent:
                     "item_id": self._extract_item_id(normalized),
                     "intent": self._extract_intent(normalized, "use_item"),
                 },
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "attack"):
-            return self._finalize_candidate({
+    def _parse_attack_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        scene_snapshot: Any,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析攻击动作，优先从当前场景目标解析 target_id，再回退全局别名。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；scene_snapshot（Any）：场景快照；
+            action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 attack 候选，否则返回 None。
+        异常：不抛异常；目标缺失时返回 target_id=None，由主循环处理不明确目标。
+        """
+        if not self._matches_action(normalized, action_keywords, "attack"):
+            return None
+        return self._finalize_candidate(
+            {
                 "type": "attack",
                 "raw_input": user_input,
                 "actor_id": actor_id,
-                "target_id": self._extract_target_id(normalized),
+                "target_id": self._extract_scene_target_id(
+                    normalized,
+                    scene_snapshot,
+                    {"attack"},
+                )
+                or self._extract_target_id(normalized),
                 "parameters": {"manner": self._extract_manner(normalized)},
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "talk"):
-            return self._finalize_candidate({
+    def _parse_talk_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        scene_snapshot: Any,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析交谈动作，场景 NPC 与 talk 交互别名优先于全局关键词。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；scene_snapshot（Any）：场景快照；
+            action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 talk 候选，否则返回 None。
+        异常：不抛异常；topic/manner 缺失按空值降级。
+        """
+        if not (
+            self._any_scene_alias_matches(normalized, scene_snapshot, ["visible_npcs"])
+            or self._any_scene_alias_matches(
+                normalized,
+                scene_snapshot,
+                ["interactables"],
+                kinds={"talk"},
+            )
+            or self._matches_action(normalized, action_keywords, "talk")
+        ):
+            return None
+        return self._finalize_candidate(
+            {
                 "type": "talk",
                 "raw_input": user_input,
                 "actor_id": actor_id,
-                "target_id": self._extract_target_id(normalized),
+                "target_id": self._extract_scene_target_id(
+                    normalized,
+                    scene_snapshot,
+                    {"talk"},
+                )
+                or self._extract_target_id(normalized),
                 "parameters": {
                     "topic": self._extract_topic(normalized),
                     "manner": self._extract_manner(normalized),
                 },
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "move"):
-            return self._finalize_candidate({
+    def _parse_move_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        scene_snapshot: Any,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析移动动作，优先使用当前场景 exits 别名解析目标地点。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；scene_snapshot（Any）：场景快照；
+            action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 move 候选，否则返回 None。
+        异常：不抛异常；地点解析失败时 location_id=None，由主循环澄清。
+        """
+        if not (
+            self._any_scene_alias_matches(normalized, scene_snapshot, ["exits"])
+            or self._matches_action(normalized, action_keywords, "move")
+        ):
+            return None
+        return self._finalize_candidate(
+            {
                 "type": "move",
                 "raw_input": user_input,
                 "actor_id": actor_id,
@@ -124,10 +357,39 @@ class NLUAgent:
                     "location_id": self._extract_location_id(normalized, scene_snapshot),
                     "manner": self._extract_manner(normalized),
                 },
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "inspect"):
-            return self._finalize_candidate({
+    def _parse_inspect_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        scene_snapshot: Any,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析检查/观察对象动作，优先匹配当前场景 inspect/observe 交互对象别名。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；scene_snapshot（Any）：场景快照；
+            action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 inspect 候选，否则返回 None。
+        异常：不抛异常；object_hint 为空时保留 None 交由后续校验。
+        """
+        if not (
+            self._any_scene_alias_matches(
+                normalized,
+                scene_snapshot,
+                ["interactables"],
+                kinds={"inspect", "observe"},
+            )
+            or self._matches_action(normalized, action_keywords, "inspect")
+        ):
+            return None
+        return self._finalize_candidate(
+            {
                 "type": "inspect",
                 "raw_input": user_input,
                 "actor_id": actor_id,
@@ -136,10 +398,38 @@ class NLUAgent:
                     "intent": self._extract_intent(normalized, "inspect"),
                     "object_hint": self._extract_object_hint(normalized, scene_snapshot),
                 },
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "interact"):
-            return self._finalize_candidate({
+    def _parse_interact_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        scene_snapshot: Any,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析泛交互动作，作为具体 talk/inspect/move 之后的兜底规则。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；scene_snapshot（Any）：场景快照；
+            action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 interact 候选，否则返回 None。
+        异常：不抛异常；目标缺失时按 None 降级。
+        """
+        if not (
+            self._any_scene_alias_matches(
+                normalized,
+                scene_snapshot,
+                ["interactables"],
+            )
+            or self._matches_action(normalized, action_keywords, "interact")
+        ):
+            return None
+        return self._finalize_candidate(
+            {
                 "type": "interact",
                 "raw_input": user_input,
                 "actor_id": actor_id,
@@ -148,19 +438,28 @@ class NLUAgent:
                     "intent": self._extract_intent(normalized, "interact"),
                     "object_hint": self._extract_object_hint(normalized, scene_snapshot),
                 },
-            }, user_input, actor_id)
+            },
+            user_input,
+            actor_id,
+        )
 
-        if self._matches_action(normalized, action_keywords, "rest"):
-            return self._build_self_action("rest", user_input, actor_id)
-
-        if self._matches_action(normalized, action_keywords, "wait"):
-            return self._build_self_action("wait", user_input, actor_id)
-
-        if self._matches_action(normalized, action_keywords, "observe"):
-            return self._build_self_action("observe", user_input, actor_id)
-
-        if self.llm_enabled:
-            return self._parse_with_llm(user_input, actor_id, scene_snapshot)
+    def _parse_simple_self_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析 rest/wait/observe 这类只作用于当前角色或当前场景的基础动作。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回基础动作，否则返回 None。
+        异常：_build_self_action 理论失败时抛 RuntimeError，保持原基础动作构造契约。
+        """
+        for action_type in ("rest", "wait", "observe"):
+            if self._matches_action(normalized, action_keywords, action_type):
+                return self._build_self_action(action_type, user_input, actor_id)
         return None
 
     def _finalize_candidate(
@@ -354,9 +653,9 @@ class NLUAgent:
             "只输出 JSON 对象，不要解释。"
             f"\n玩家输入: {user_input}"
             f"\nscene_snapshot: {json.dumps(compact_scene, ensure_ascii=False)}"
-            "\nJSON格式: {\"type\":\"observe\",\"target_id\":null,\"parameters\":{},"
-            "\"confidence\":0.8,\"needs_clarification\":false,"
-            "\"clarification_question\":\"\"}"
+            '\nJSON格式: {"type":"observe","target_id":null,"parameters":{},'
+            '"confidence":0.8,"needs_clarification":false,'
+            '"clarification_question":""}'
         )
 
     def _load_llm_action_json(self, raw_text: str) -> dict[str, Any] | None:
@@ -404,13 +703,17 @@ class NLUAgent:
         出参：dict[str, Any]，符合主循环候选动作结构。
         异常：不抛异常；字段按调用方传入值原样写入。
         """
-        finalized = self._finalize_candidate({
-            "type": action_type,
-            "raw_input": raw_input,
-            "actor_id": actor_id,
-            "target_id": actor_id,
-            "parameters": {},
-        }, raw_input, actor_id)
+        finalized = self._finalize_candidate(
+            {
+                "type": action_type,
+                "raw_input": raw_input,
+                "actor_id": actor_id,
+                "target_id": actor_id,
+                "parameters": {},
+            },
+            raw_input,
+            actor_id,
+        )
         if finalized is None:
             raise RuntimeError(f"基础动作构造失败: action_type={action_type}")
         return finalized
@@ -455,6 +758,149 @@ class NLUAgent:
         target_aliases = self.nlu_rules.get("target_aliases", {})
         return self._match_alias_id(normalized_input, target_aliases)
 
+    def _extract_scene_target_id(
+        self,
+        normalized_input: str,
+        scene_snapshot: Any,
+        action_types: set[str],
+    ) -> str | None:
+        """
+        功能：从当前场景的 affordance、NPC 与 Story Pack 交互定义中解析动作目标。
+        入参：normalized_input（str）：已归一化输入；scene_snapshot（Any）：当前场景快照；
+            action_types（set[str]）：需要匹配的标准动作类型，例如 {"talk"}。
+        出参：str | None，命中场景目标返回目标 ID；无匹配或快照非法返回 None。
+        异常：不抛异常；脏快照字段按空集合降级，避免 NLU 因展示数据异常中断。
+        """
+        if not isinstance(scene_snapshot, dict):
+            return None
+
+        target_id = self._match_affordance_target(normalized_input, scene_snapshot, action_types)
+        if target_id is not None:
+            return target_id
+
+        target_id = self._match_visible_npc_target(normalized_input, scene_snapshot)
+        if target_id is not None:
+            return target_id
+
+        return self._match_interactable_target(normalized_input, scene_snapshot, action_types)
+
+    def _match_affordance_target(
+        self,
+        normalized_input: str,
+        scene_snapshot: dict[str, Any],
+        action_types: set[str],
+    ) -> str | None:
+        """
+        功能：从 scene_snapshot.affordances 中按按钮文案反查 target_id。
+        入参：normalized_input（str）：已归一化输入；scene_snapshot（dict[str, Any]）：场景快照；
+            action_types（set[str]）：允许匹配的动作类型。
+        出参：str | None，命中返回 affordance.target_id。
+        异常：不抛异常；affordances 非列表或条目非法时跳过。
+        """
+        raw_affordances = scene_snapshot.get("affordances", [])
+        if not isinstance(raw_affordances, list):
+            return None
+        for item in raw_affordances:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("action_type") or "") not in action_types:
+                continue
+            target_id = str(item.get("target_id") or "").strip()
+            if not target_id:
+                continue
+            candidates = [
+                str(item.get("label") or ""),
+                str(item.get("user_input") or ""),
+                str(item.get("object_id") or ""),
+                str(item.get("slot_id") or ""),
+            ]
+            if self._any_candidate_contains(normalized_input, candidates):
+                return target_id
+        return None
+
+    def _match_visible_npc_target(
+        self,
+        normalized_input: str,
+        scene_snapshot: dict[str, Any],
+    ) -> str | None:
+        """
+        功能：从 visible_npcs 中按实体名、展示名或别名解析 NPC 目标。
+        入参：normalized_input（str）：已归一化输入；scene_snapshot（dict[str, Any]）：场景快照。
+        出参：str | None，命中返回 NPC entity_id/id。
+        异常：不抛异常；visible_npcs 非列表或条目非法时跳过。
+        """
+        raw_npcs = scene_snapshot.get("visible_npcs", [])
+        if not isinstance(raw_npcs, list):
+            return None
+        for item in raw_npcs:
+            if not isinstance(item, dict):
+                continue
+            target_id = str(item.get("entity_id") or item.get("id") or "").strip()
+            if not target_id:
+                continue
+            candidates = [
+                target_id,
+                str(item.get("label") or ""),
+                str(item.get("name") or ""),
+            ]
+            aliases = item.get("aliases", [])
+            if isinstance(aliases, list):
+                candidates.extend(str(alias) for alias in aliases if isinstance(alias, str))
+            if self._any_candidate_contains(normalized_input, candidates):
+                return target_id
+        return None
+
+    def _match_interactable_target(
+        self,
+        normalized_input: str,
+        scene_snapshot: dict[str, Any],
+        action_types: set[str],
+    ) -> str | None:
+        """
+        功能：从 Story Pack interactables 的 target_ref 解析交互目标。
+        入参：normalized_input（str）：已归一化输入；scene_snapshot（dict[str, Any]）：场景快照；
+            action_types（set[str]）：允许匹配的交互 kind。
+        出参：str | None，命中返回 interactable.target_ref。
+        异常：不抛异常；interactables 非列表或条目非法时跳过。
+        """
+        raw_interactables = scene_snapshot.get("interactables", [])
+        if not isinstance(raw_interactables, list):
+            return None
+        for item in raw_interactables:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("kind") or "") not in action_types:
+                continue
+            target_id = str(item.get("target_ref") or "").strip()
+            if not target_id:
+                continue
+            candidates = [
+                target_id,
+                str(item.get("interaction_id") or ""),
+                str(item.get("label") or ""),
+            ]
+            aliases = item.get("aliases", [])
+            if isinstance(aliases, list):
+                candidates.extend(str(alias) for alias in aliases if isinstance(alias, str))
+            if self._any_candidate_contains(normalized_input, candidates):
+                return target_id
+        return None
+
+    def _any_candidate_contains(self, normalized_input: str, candidates: list[str]) -> bool:
+        """
+        功能：判断候选别名是否出现在归一化输入中。
+        入参：normalized_input（str）：已归一化输入；candidates（list[str]）：候选文案列表。
+        出参：bool，任一非空候选命中返回 True。
+        异常：不抛异常；空候选或空输入返回 False。
+        """
+        if not normalized_input:
+            return False
+        for candidate in candidates:
+            normalized_candidate = candidate.strip().lower()
+            if normalized_candidate and normalized_candidate in normalized_input:
+                return True
+        return False
+
     def _extract_location_id(
         self,
         normalized_input: str,
@@ -478,9 +924,7 @@ class NLUAgent:
                     direction = str(exit_info.get("direction", ""))
                     candidates = [label, direction]
                     if isinstance(aliases, list):
-                        candidates.extend(
-                            str(alias) for alias in aliases if isinstance(alias, str)
-                        )
+                        candidates.extend(str(alias) for alias in aliases if isinstance(alias, str))
                     if any(candidate and candidate in normalized_input for candidate in candidates):
                         return str(exit_info.get("location_id", "unknown"))
                 if len(exits) == 1 and any(
@@ -546,9 +990,7 @@ class NLUAgent:
         出参：str，命中询问类表达时返回原输入，否则为空。
         异常：不抛异常。
         """
-        has_topic_keyword = any(
-            keyword in normalized_input for keyword in ["问", "询问", "打听"]
-        )
+        has_topic_keyword = any(keyword in normalized_input for keyword in ["问", "询问", "打听"])
         return normalized_input if has_topic_keyword else ""
 
     def _extract_object_hint(self, normalized_input: str, scene_snapshot: Any = None) -> str:
@@ -577,3 +1019,75 @@ class NLUAgent:
                         if candidate and candidate.lower() in normalized_input:
                             return candidate
         return ""
+
+    # ---- A2-Plus 场景别名优先匹配：通用场景实体别名检查 ----
+    def _any_scene_alias_matches(
+        self,
+        normalized_input: str,
+        scene_snapshot: Any,
+        alias_types: list[str],
+        kinds: set[str] | None = None,
+    ) -> bool:
+        """
+        功能：遍历 scene_snapshot 中指定实体类型的 label/name/direction/aliases，
+             检查 normalized_input 是否包含任一候选词；命中时返回 True。
+             kinds 非空时仅匹配 kind/action_type/object_type 落在集合内的实体。
+        入参：normalized_input（str）：已归一化输入；scene_snapshot（Any）：场景快照；
+             alias_types（list[str]）：实体类型键列表；kinds（set[str] | None）：可选类型过滤。
+        出参：bool，命中任一实体别名返回 True。
+        异常：不抛异常；快照缺失或结构不完整返回 False。
+        """
+        if scene_snapshot is None:
+            return False
+
+        snap: Any = scene_snapshot if isinstance(scene_snapshot, dict) else scene_snapshot
+        for entity_key in alias_types:
+            if isinstance(snap, dict):
+                entities = snap.get(entity_key, [])
+            else:
+                entities = getattr(snap, entity_key, None) or []
+            if not isinstance(entities, list):
+                continue
+
+            for entity in entities:
+                if isinstance(entity, dict):
+                    label = str(entity.get("label", ""))
+                    name = str(entity.get("name", ""))
+                    direction = str(entity.get("direction", ""))
+                    aliases = entity.get("aliases", [])
+                    entity_kind = str(
+                        entity.get("kind")
+                        or entity.get("action_type")
+                        or entity.get("object_type")
+                        or ""
+                    )
+                else:
+                    label = str(getattr(entity, "label", ""))
+                    name = str(getattr(entity, "name", ""))
+                    direction = str(getattr(entity, "direction", ""))
+                    aliases = getattr(entity, "aliases", None) or []
+                    entity_kind = str(
+                        getattr(entity, "kind", "")
+                        or getattr(entity, "action_type", "")
+                        or getattr(entity, "object_type", "")
+                        or ""
+                    )
+                if kinds is not None and entity_kind not in kinds:
+                    continue
+
+                candidates: list[str] = []
+                if label:
+                    candidates.append(label)
+                if name and name != label:
+                    candidates.append(name)
+                if direction and direction not in candidates:
+                    candidates.append(direction)
+                if isinstance(aliases, list):
+                    candidates.extend(str(a) for a in aliases if isinstance(a, str))
+
+                for candidate in candidates:
+                    candidate_norm = str(candidate).strip().lower()
+                    if candidate_norm and candidate_norm in normalized_input:
+                        return True
+
+        return False

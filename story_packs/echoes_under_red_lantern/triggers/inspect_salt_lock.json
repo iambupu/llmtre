@@ -1,0 +1,19 @@
+{
+  "trigger_id": "inspect_salt_lock",
+  "type": "inspect",
+  "label": "盐壳旧锁",
+  "description": "旧锁证明水窖不是天然形成，而是有人长期维护。",
+  "effects": [
+    "narrative",
+    "set_flag"
+  ],
+  "conditions": {
+    "scene_id": "tide_cellar",
+    "interaction_id": "inspect_salt_lock",
+    "flag": "salt_lock_maintained",
+    "narrative_text": "盐壳下面的锁孔很新，说明三年来一直有人来过这里，重新锁上水窖。",
+    "memory_text": "潮下水窖的旧锁被持续维护，说明失踪并非无人知情。"
+  },
+  "once": true,
+  "priority": 60
+}

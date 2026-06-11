@@ -1,7 +1,14 @@
+"""
+功能：覆盖 state mutators a1 的回归测试。
+"""
+
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 from state.models.action import ActionEffect, ActionTemplate, ActionType, EffectType
 from state.tools.state_mutators import StateMutators
@@ -17,8 +24,7 @@ def _init_state_mutator_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         for table in ("entities_active", "entities_shadow"):
-            cursor.execute(
-                f"""
+            cursor.execute(f"""
                 CREATE TABLE {table} (
                     entity_id TEXT PRIMARY KEY,
                     hp INTEGER NOT NULL,
@@ -26,43 +32,32 @@ def _init_state_mutator_db(db_path: Path) -> None:
                     mp INTEGER NOT NULL,
                     max_mp INTEGER NOT NULL
                 )
-                """
-            )
+                """)
         for table in ("inventory_active", "inventory_shadow"):
-            cursor.execute(
-                f"""
+            cursor.execute(f"""
                 CREATE TABLE {table} (
                     owner_id TEXT NOT NULL,
                     item_id TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
                     UNIQUE(owner_id, item_id)
                 )
-                """
-            )
-        cursor.execute(
-            """
+                """)
+        cursor.execute("""
             INSERT INTO entities_active(entity_id, hp, max_hp, mp, max_mp)
             VALUES('player_01', 5, 10, 2, 5)
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             INSERT INTO entities_shadow(entity_id, hp, max_hp, mp, max_mp)
             VALUES('player_01', 8, 10, 4, 5)
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             INSERT INTO inventory_active(owner_id, item_id, quantity)
             VALUES('player_01', 'potion', 3)
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             INSERT INTO inventory_active(owner_id, item_id, quantity)
             VALUES('npc_01', 'potion', 1)
-            """
-        )
+            """)
         conn.commit()
 
 
@@ -79,6 +74,7 @@ def _action(*effects: ActionEffect) -> ActionTemplate:
         action_type=ActionType.INTERACT,
         trigger_description="测试",
         success_effects=list(effects),
+        failure_path=None,
     )
 
 
@@ -161,28 +157,28 @@ def test_apply_action_item_transfer_deducts_and_upserts_inventory(tmp_path: Path
     assert mutators.apply_action(_action(effect)) is True
 
     with sqlite3.connect(db_path) as conn:
-        rows = dict(
-            conn.execute(
-                """
+        rows = dict(conn.execute("""
                 SELECT owner_id, quantity
                 FROM inventory_active
                 WHERE item_id = 'potion'
-                """
-            ).fetchall()
-        )
+                """).fetchall())
     assert rows == {"player_01": 1, "npc_01": 3}
 
 
-def test_apply_action_rolls_back_when_later_effect_fails(tmp_path: Path, capsys) -> None:
+def test_apply_action_rolls_back_when_later_effect_fails(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """
     功能：验证同一动作内后续效果失败时会回滚前序成功写入并返回 False。
-    入参：tmp_path；capsys。
+    入参：tmp_path；caplog。
     出参：None。
     异常：断言失败表示事务边界或失败输出回归。
     """
     db_path = tmp_path / "mutators_rollback.db"
     _init_state_mutator_db(db_path)
     mutators = StateMutators(str(db_path))
+    caplog.set_level(logging.ERROR, logger="state.tools.state_mutators")
     valid_effect = ActionEffect(
         effect_type=EffectType.RESOURCE_CHANGE,
         target_id="player_01",
@@ -197,12 +193,13 @@ def test_apply_action_rolls_back_when_later_effect_fails(tmp_path: Path, capsys)
     assert mutators.apply_action(_action(valid_effect, invalid_effect)) is False
 
     assert _read_entity(db_path, "entities_active") == (5, 2)
-    assert "Action execution failed" in capsys.readouterr().out
+    assert "动作执行失败，已回滚事务" in caplog.text
+    assert "不支持的资源字段: unknown" in caplog.text
 
 
 def test_apply_action_stops_before_db_when_preconditions_fail(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     功能：验证前置条件失败时不会打开数据库事务，也不会执行任何效果。

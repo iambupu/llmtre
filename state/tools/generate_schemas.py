@@ -1,3 +1,7 @@
+"""
+功能：从 Pydantic 状态模型生成 JSON Schema 文件。
+"""
+
 import json
 import os
 import sys
@@ -27,7 +31,7 @@ def generate_schemas() -> None:
         "npc_schema.json": EntityTemplate.model_json_schema(),
         "location_schema.json": LocationTemplate.model_json_schema(),
         "action_schema.json": ActionTemplate.model_json_schema(),
-        "quest_schema.json": QuestTemplate.model_json_schema()
+        "quest_schema.json": QuestTemplate.model_json_schema(),
     }
 
     for filename, schema_dict in schemas.items():
@@ -35,6 +39,7 @@ def generate_schemas() -> None:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(schema_dict, f, ensure_ascii=False, indent=2)
         print(f"Generated schema: {filepath}")
+
 
 if __name__ == "__main__":
     generate_schemas()

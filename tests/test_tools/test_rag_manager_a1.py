@@ -1,3 +1,7 @@
+"""
+功能：覆盖 rag manager a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,10 +21,22 @@ class _FakeBuilder:
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.config = config
         self.rules_path: str | None = None
 
     def build_all(self, rules_path: str | None = None) -> None:
+        """
+        功能：提供 build all 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.rules_path = rules_path
 
 
@@ -33,14 +49,32 @@ class _FakeRetriever:
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.config = config
 
     def query(self, query: str) -> str:
+        """
+        功能：提供 query 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if query == "raise":
             raise RuntimeError("retriever down")
         return f"query:{query}"
 
     def query_readonly(self, query: str) -> str:
+        """
+        功能：提供 query readonly 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if query == "raise":
             raise RuntimeError("readonly down")
         return f"readonly:{query}"
@@ -55,9 +89,21 @@ class _FakeLLM:
     """
 
     def __init__(self, **kwargs: Any) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.kwargs = kwargs
 
     def complete(self, text: str) -> str:
+        """
+        功能：提供 complete 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if text == "fail":
             raise RuntimeError("llm failed")
         return "pong"
@@ -72,9 +118,21 @@ class _FakeEmbedding:
     """
 
     def __init__(self, **kwargs: Any) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.kwargs = kwargs
 
     def get_text_embedding(self, text: str) -> list[float]:
+        """
+        功能：提供 get text embedding 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if text == "fail":
             raise RuntimeError("embedding failed")
         return [0.1]
@@ -150,9 +208,13 @@ def test_rag_manager_initializes_default_model_clients(monkeypatch: pytest.Monke
 
     manager = RAGManager()
 
-    assert manager._get_default_base_url("qwen") == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert (
+        manager._get_default_base_url("qwen") == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
     assert _FakeSettings.llm.kwargs["api_key"] == "sk-dummy"
-    assert _FakeSettings.llm.kwargs["api_base"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert (
+        _FakeSettings.llm.kwargs["api_base"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
     assert _FakeSettings.embed_model.kwargs["model_name"] == "embed-test"
 
 

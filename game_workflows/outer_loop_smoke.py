@@ -1,3 +1,7 @@
+"""
+功能：提供外环工作流烟测入口和示例事件流。
+"""
+
 from __future__ import annotations
 
 import asyncio

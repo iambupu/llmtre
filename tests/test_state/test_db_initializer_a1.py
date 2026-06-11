@@ -1,3 +1,7 @@
+"""
+功能：覆盖 db initializer a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -215,15 +219,11 @@ def test_initialize_db_merges_mods_rejects_bad_data_and_imports_inventory(
             ("item_01",),
         ).fetchone()
         bad_item = conn.execute("SELECT 1 FROM items WHERE item_id = 'bad_item'").fetchone()
-        inventory_rows = dict(
-            conn.execute(
-                """
+        inventory_rows = dict(conn.execute("""
                 SELECT item_id, quantity
                 FROM inventory_active
                 WHERE owner_id = 'player_01'
-                """
-            ).fetchall()
-        )
+                """).fetchall())
         entity_row = conn.execute(
             "SELECT name, hp, max_hp FROM entities_active WHERE entity_id = 'player_01'"
         ).fetchone()

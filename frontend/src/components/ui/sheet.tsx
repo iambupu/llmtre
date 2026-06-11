@@ -5,28 +5,60 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
+/**
+ * 功能：封装侧边抽屉根节点。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
 }
 
-function SheetTrigger({
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Trigger>) {
-  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />
-}
+/**
+ * 功能：封装打开侧边抽屉的触发元素，并向 Radix Trigger 转发 ref。
+ * 入参：props（SheetPrimitive.Trigger 属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
+const SheetTrigger = React.forwardRef<
+  React.ComponentRef<typeof SheetPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof SheetPrimitive.Trigger>
+>(({ ...props }, ref) => (
+  <SheetPrimitive.Trigger ref={ref} data-slot="sheet-trigger" {...props} />
+))
+SheetTrigger.displayName = "SheetTrigger"
 
+/**
+ * 功能：封装关闭侧边抽屉的触发元素。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetClose({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Close>) {
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />
 }
 
+/**
+ * 功能：封装侧边抽屉 Portal 挂载点。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetPortal({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Portal>) {
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
+/**
+ * 功能：渲染侧边抽屉遮罩层并合并项目动画样式。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetOverlay({
   className,
   ...props
@@ -43,6 +75,12 @@ function SheetOverlay({
   )
 }
 
+/**
+ * 功能：渲染侧边抽屉内容区并按方向控制布局。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetContent({
   className,
   children,
@@ -84,6 +122,12 @@ function SheetContent({
   )
 }
 
+/**
+ * 功能：渲染侧边抽屉头部布局容器。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -94,6 +138,12 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/**
+ * 功能：渲染侧边抽屉底部操作容器。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -104,6 +154,12 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/**
+ * 功能：渲染侧边抽屉标题文本。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetTitle({
   className,
   ...props
@@ -120,6 +176,12 @@ function SheetTitle({
   )
 }
 
+/**
+ * 功能：渲染侧边抽屉描述文本。
+ * 入参：props（React 组件属性）：透传到底层 DOM 或 Radix 原语。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
 function SheetDescription({
   className,
   ...props

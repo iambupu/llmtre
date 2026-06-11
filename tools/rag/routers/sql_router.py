@@ -1,3 +1,7 @@
+"""
+功能：提供面向结构化查询的 SQL 路由辅助逻辑。
+"""
+
 import logging
 import os
 from typing import Any
@@ -8,6 +12,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("RAGManager.SQLRouter")
+
 
 class SQLRouter:
     """SQL 路由：将自然语言转换为针对 SQLite 数据库的查询"""
@@ -31,7 +36,7 @@ class SQLRouter:
             "inventory_active",
             "world_state_active",
             "quests_active",
-            "event_logs"
+            "event_logs",
         ]
 
     def _ensure_initialized(self) -> None:
@@ -77,9 +82,7 @@ class SQLRouter:
         if self._sql_database is None:
             return None
         return NLSQLTableQueryEngine(
-            sql_database=self._sql_database,
-            llm=llm,
-            tables=self.available_tables
+            sql_database=self._sql_database, llm=llm, tables=self.available_tables
         )
 
     def query_raw(self, sql: str) -> list[dict[str, Any]]:

@@ -1,3 +1,7 @@
+"""
+功能：覆盖 async watchers bridge a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import pytest
@@ -37,6 +41,12 @@ class _FakeWorkflow:
         self.last_start_event = start_event
 
         async def _handler():
+            """
+            功能：提供 handler 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return "handled"
 
         return _handler()
@@ -51,9 +61,21 @@ class _FakeDBUpdater:
     """
 
     def __init__(self, *args, **kwargs) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.unlocked: set[tuple[str, str]] = set()
 
     def is_achievement_unlocked(self, entity_id: str, achievement_id: str) -> bool:
+        """
+        功能：提供 is achievement unlocked 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         return (entity_id, achievement_id) in self.unlocked
 
 
@@ -122,7 +144,20 @@ def test_global_workflow_achievement_helpers(monkeypatch) -> None:
     """
 
     class _FakeEvolutionAgent:
+        """
+        功能：提供 FakeEvolutionAgent 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeEvolutionAgent 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self, db_updater) -> None:  # noqa: ARG002
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             pass
 
     monkeypatch.setattr("game_workflows.async_watchers.DBUpdater", _FakeDBUpdater)

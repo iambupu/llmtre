@@ -14,17 +14,10 @@
       "discard_sandbox": ["回滚沙盒", "放弃沙盒", "取消沙盒"]
     },
     "target_aliases": {
-      "goblin_01": ["地精", "goblin"],
       "player_01": ["旅行者", "player"]
     },
-    "location_aliases": {
-      "road": ["路", "道路", "路上"],
-      "forest_edge": ["森林", "forest"],
-      "camp": ["营地", "camp"]
-    },
-    "item_aliases": {
-      "health_potion_01": ["药水", "potion"]
-    }
+    "location_aliases": {},
+    "item_aliases": {}
   },
   "resolution": {
     "attack": {
@@ -35,15 +28,12 @@
       "min_damage": 1
     },
     "move": {
-      "mp_delta": -1,
       "state_flags_add": ["moved_recently"]
     },
     "talk": {
-      "mp_delta": -1,
       "state_flags_add": ["conversation_started"]
     },
     "interact": {
-      "mp_delta": -1,
       "state_flags_add": ["observed_surroundings"]
     },
     "observe": {
@@ -96,66 +86,15 @@
       }
     }
   },
-  "scene_defaults": {
-    "locations": {
-      "unknown": {
-        "id": "unknown",
-        "name": "无名道路",
-        "description": "一段尚未完全记录在世界状态中的道路。",
-        "exits": [
-          {
-            "direction": "forward",
-            "location_id": "forest_edge",
-            "label": "森林边缘",
-            "aliases": ["森林", "前方", "继续", "路上", "前进"]
-          }
-        ],
-        "visible_items": [],
-        "active_quests": []
-      },
-      "forest_edge": {
-        "id": "forest_edge",
-        "name": "森林边缘",
-        "description": "树影压在道路尽头，灌木间偶尔传来细碎声响。",
-        "exits": [
-          {
-            "direction": "back",
-            "location_id": "camp",
-            "label": "营地",
-            "aliases": ["营地", "回去", "后方"]
-          }
-        ],
-        "visible_items": [],
-        "active_quests": []
-      },
-      "camp": {
-        "id": "camp",
-        "name": "临时营地",
-        "description": "篝火余温尚在，是短暂整理状态的安全地点。",
-        "exits": [
-          {
-            "direction": "forward",
-            "location_id": "forest_edge",
-            "label": "森林边缘",
-            "aliases": ["森林", "前方"]
-          }
-        ],
-        "visible_items": [],
-        "active_quests": []
-      }
-    },
-    "available_actions": ["observe", "wait", "rest", "move", "talk", "inspect", "use_item", "attack"],
-    "suggested_actions": ["看看周围", "继续前进", "坐一会", "检查背包"]
-  },
   "narrative_templates": {
     "invalid": "{actor_name}的行动未能成立：{errors}",
     "idle": "{actor_name}暂时没有采取有效行动。",
     "attack_hit": "{actor_name}发起了攻击，判定 {attack_roll} 超过 {attack_dc}，对 {target_id} 造成了 {damage} 点伤害。",
     "attack_miss": "{actor_name}发起了攻击，但未能命中 {target_id}。判定 {attack_roll} 未达到 {attack_dc}。",
-    "talk": "{actor_name}与 {target_id} 进行交谈，消耗了 {mp_cost} 点法力。",
-    "move": "{actor_name}前往了 {location_id}，消耗了 {mp_cost} 点法力。",
+    "talk": "{actor_name}与 {target_id} 进行交谈。",
+    "move": "{actor_name}前往了 {location_id}。",
     "use_item": "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。",
-    "interact": "{actor_name}仔细观察了周围环境，消耗了 {mp_cost} 点法力。",
+    "interact": "{actor_name}仔细观察了周围环境。",
     "observe": "{actor_name}观察周围：{scene_description}",
     "wait": "{actor_name}停下来片刻，留意周围的动静。",
     "rest": "{actor_name}短暂休息，恢复了 {hp_delta} 点生命与 {mp_delta} 点法力。",

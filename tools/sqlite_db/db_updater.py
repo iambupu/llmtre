@@ -1,7 +1,11 @@
+"""
+功能：提供 SQLite Active/Shadow 状态表的读写更新工具。
+"""
+
 import json
 import os
 import sqlite3
-from typing import cast
+from typing import Literal, cast
 
 from state.tools.runtime_schema import ensure_runtime_tables
 
@@ -234,6 +238,44 @@ class DBUpdater:
             if owns_conn:
                 active_conn.close()
 
+    def grant_item(
+        self,
+        owner_id: str,
+        item_id: str,
+        quantity: int = 1,
+        use_shadow: bool = False,
+        conn: sqlite3.Connection | None = None,
+    ) -> bool:
+        """
+        功能：向背包授予物品；已存在时累加数量。
+        入参：owner_id（str）：持有者；item_id（str）：物品 ID；quantity（int）：数量；
+            use_shadow（bool）：是否写入影子背包；conn（sqlite3.Connection | None）：事务连接。
+        出参：bool，写入成功返回 True。
+        异常：SQL 执行失败向上抛出，由调用方事务边界回滚。
+        """
+        if not owner_id or not item_id:
+            return False
+        table = "inventory_shadow" if use_shadow else "inventory_active"
+        owns_conn = conn is None
+        active_conn = conn or self._get_conn()
+        try:
+            cursor = active_conn.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {table}(owner_id, item_id, quantity)
+                VALUES(?, ?, ?)
+                ON CONFLICT(owner_id, item_id)
+                DO UPDATE SET quantity = quantity + excluded.quantity
+                """,
+                (owner_id, item_id, max(1, int(quantity))),
+            )
+            if owns_conn:
+                active_conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            if owns_conn:
+                active_conn.close()
+
     def has_shadow_state(self) -> bool:
         """
         功能：判断影子表中是否已有快照数据。
@@ -344,13 +386,11 @@ class DBUpdater:
             if not force and owner != session_id:
                 return False
             cursor = active_conn.cursor()
-            cursor.execute(
-                """
+            cursor.execute("""
                 UPDATE web_sandbox_lock
                 SET owner_session_id = NULL, updated_at = CURRENT_TIMESTAMP
                 WHERE lock_id = 1
-                """
-            )
+                """)
             if owns_conn:
                 active_conn.commit()
             return True
@@ -525,6 +565,71 @@ class DBUpdater:
             conn.commit()
             return cursor.rowcount > 0
 
+    def record_achievement_unlock_with_reward(
+        self,
+        entity_id: str,
+        achievement_id: str,
+        description: str,
+        reward: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """
+        功能：在同一事务中写入成就解锁记录和可选奖励，避免奖励失败后成就被永久去重。
+        入参：entity_id（str）：领奖实体；achievement_id（str）：成就 ID；
+            description（str）：成就描述；
+            reward（dict[str, object] | None，默认 None）：状态奖励 diff。
+        出参：dict[str, object]，status 为 unlocked/already_unlocked/reward_failed/failed。
+        异常：不向外抛出；数据库异常会回滚并返回 failed，调用方负责日志和降级处理。
+        """
+        reward_payload = reward or {}
+        reward_json = json.dumps(reward_payload, ensure_ascii=False)
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.cursor()
+            row = cursor.execute(
+                """
+                SELECT 1 FROM achievement_unlocks
+                WHERE entity_id = ? AND achievement_id = ?
+                LIMIT 1
+                """,
+                (entity_id, achievement_id),
+            ).fetchone()
+            if row is not None:
+                conn.commit()
+                return {"status": "already_unlocked"}
+
+            reward_applied = False
+            if reward_payload:
+                reward_applied = self.apply_diff(
+                    entity_id,
+                    reward_payload,
+                    use_shadow=False,
+                    conn=conn,
+                )
+                if not reward_applied:
+                    conn.rollback()
+                    return {
+                        "status": "reward_failed",
+                        "reason": "entity_missing_or_not_updated",
+                    }
+
+            cursor.execute(
+                """
+                INSERT INTO achievement_unlocks
+                (entity_id, achievement_id, description, reward_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (entity_id, achievement_id, description, reward_json),
+            )
+            conn.commit()
+            status: Literal["unlocked"] = "unlocked"
+            return {"status": status, "reward_applied": reward_applied}
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            return {"status": "failed", "reason": str(exc)}
+        finally:
+            conn.close()
+
     def enqueue_outer_event(self, event_name: str, payload: dict[str, object], error: str) -> int:
         """
         功能：执行 `enqueue_outer_event` 相关业务逻辑。
@@ -626,7 +731,7 @@ class DBUpdater:
                         "last_error": str(row[4] or ""),
                         "status": str(row[5] or "pending"),
                     }
-            )
+                )
             return result
 
     def reclaim_stuck_processing_outer_events(self, timeout_seconds: int = 30) -> int:
@@ -663,7 +768,7 @@ class DBUpdater:
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                    """
+                """
                 UPDATE outer_event_outbox
                 SET status = 'delivered', updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?

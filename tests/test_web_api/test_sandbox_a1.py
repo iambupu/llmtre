@@ -1,9 +1,14 @@
+"""
+功能：覆盖 sandbox a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import sqlite3
 import threading
 from collections.abc import Generator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -137,6 +142,7 @@ def sandbox_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[Flask
     db_path = str(tmp_path / "runtime.db")
     _init_runtime_db(db_path)
     context = _FakeRuntimeContext(db_path)
+    context.agent_context_dir = str(tmp_path / ".agent_context")
     context.session_store.create_session(
         session_id="sess_a1demo01",
         character_id="player_01",
@@ -218,6 +224,10 @@ def test_sandbox_commit_idempotent_replay_hits_cache(sandbox_client) -> None:
     assert first_body["session_turn_id"] == 1
     assert second_body["session_turn_id"] == 1
     assert sandbox_client.call_count["run_turn"] == 1
+    context = sandbox_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    memory_path = Path(str(context.agent_context_dir)) / "sessions" / "sess_a1demo01" / "MEMORY.md"
+    assert memory_path.exists()
+    assert "响应:并入主线" in memory_path.read_text(encoding="utf-8")
 
 
 def test_sandbox_commit_post_run_persist_failure_reuses_trace(
@@ -232,6 +242,12 @@ def test_sandbox_commit_post_run_persist_failure_reuses_trace(
     """
 
     def failing_persist(*args: Any, **kwargs: Any) -> Any:
+        """
+        功能：提供 failing persist 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("persist failed")
 
     monkeypatch.setattr(
@@ -329,6 +345,12 @@ def test_sandbox_discard_returns_turn_execution_error_payload(
     """
 
     def failing_run_turn(*args: Any, **kwargs: Any) -> Any:
+        """
+        功能：提供 failing run turn 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise TurnExecutionError(
             message="conflict",
             error_code="EVENT_CONFLICT",
@@ -360,6 +382,12 @@ def test_sandbox_commit_returns_internal_error_on_unexpected_run_turn_exception(
     """
 
     def boom_run_turn(*args: Any, **kwargs: Any) -> Any:
+        """
+        功能：提供 boom run turn 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         raise RuntimeError("boom")
 
     monkeypatch.setattr("web_api.blueprints.sandbox.run_turn", boom_run_turn)

@@ -1,3 +1,7 @@
+"""
+功能：覆盖 affordances a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from game_workflows.affordances import build_scene_interaction_model
@@ -46,10 +50,44 @@ def test_scene_affordances_deduplicate_same_default_input() -> None:
         active_character=None,
     )
 
-    move_to_north = [
-        item for item in model["affordances"] if item["user_input"] == "前往北门"
-    ]
+    move_to_north = [item for item in model["affordances"] if item["user_input"] == "前往北门"]
     assert len(move_to_north) == 1
+
+
+def test_scene_affordances_do_not_duplicate_move_prefix() -> None:
+    """
+    功能：验证出口标签已包含移动动词时不会再额外拼接“前往”。
+    入参：无。
+    出参：None。
+    异常：断言失败表示移动按钮重新出现“前往前往/前往走向”等重复文案。
+    """
+    model = build_scene_interaction_model(
+        scene_snapshot={
+            "current_location": {"id": "dock", "name": "渡口"},
+            "exits": [
+                {"location_id": "ledger", "label": "前往旧账房"},
+                {"location_id": "bell", "label": "走向静默钟院"},
+                {"location_id": "dock", "label": "从前门回渡口"},
+                {"location_id": "dawn", "label": "带着清晨返回鹭潮渡口"},
+                {"location_id": "north", "label": "北门"},
+            ],
+            "visible_npcs": [],
+            "visible_items": [],
+        },
+        active_character=None,
+    )
+
+    affordances = {item["user_input"]: item for item in model["affordances"]}
+
+    assert "前往旧账房" in affordances
+    assert "前往前往旧账房" not in affordances
+    assert "走向静默钟院" in affordances
+    assert "前往走向静默钟院" not in affordances
+    assert "从前门回渡口" in affordances
+    assert "前往从前门回渡口" not in affordances
+    assert "带着清晨返回鹭潮渡口" in affordances
+    assert "前往带着清晨返回鹭潮渡口" not in affordances
+    assert "前往北门" in affordances
 
 
 def test_scene_affordances_project_scene_objects_to_enabled_actions() -> None:
@@ -63,6 +101,15 @@ def test_scene_affordances_project_scene_objects_to_enabled_actions() -> None:
         scene_snapshot={
             "current_location": {"id": "road", "name": "道路"},
             "exits": [{"location_id": "forest", "label": "森林"}],
+            "interactables": [
+                {
+                    "interaction_id": "talk_guard",
+                    "kind": "talk",
+                    "label": "呼唤守卫",
+                    "target_ref": "npc_guard",
+                    "aliases": ["守卫"],
+                }
+            ],
             "visible_npcs": [{"entity_id": "npc_guard", "name": "守卫"}],
             "visible_items": [{"item_id": "old_key", "name": "旧钥匙"}],
         },
@@ -74,6 +121,8 @@ def test_scene_affordances_project_scene_objects_to_enabled_actions() -> None:
     affordances = {item["user_input"]: item for item in model["affordances"]}
     assert affordances["前往森林"]["action_type"] == "move"
     assert affordances["前往森林"]["location_id"] == "forest"
+    assert affordances["呼唤守卫"]["action_type"] == "talk"
+    assert affordances["呼唤守卫"]["target_id"] == "npc_guard"
     assert affordances["和守卫交谈"]["action_type"] == "talk"
     assert affordances["和守卫交谈"]["target_id"] == "npc_guard"
     assert affordances["攻击守卫"]["action_type"] == "attack"

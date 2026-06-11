@@ -8,7 +8,10 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from game_workflows.action_text import build_move_action_text
+from game_workflows.main_loop_resolution_helpers import _check_exit_conditions, _find_pack_exit
 from state.contracts.agent import AgentEnvelope
+from state.contracts.story_pack import StoryPackSceneDef
 
 logger = logging.getLogger("Workflow.MainLoop")
 
@@ -126,6 +129,36 @@ def build_target_clarification(state: Mapping[str, Any], action_type: Any) -> st
     return f"你想{verb}哪个目标？当前可见目标：{labels}。"
 
 
+def _match_pack_exit(location_id: str, pack_scene: StoryPackSceneDef) -> bool:
+    """
+    功能：检查用户输入的目标地点是否匹配剧本包场景的任一出口。
+    入参：location_id（str）：用户移动目标（可能是 scene_id、label 或别名）；
+        pack_scene（StoryPackSceneDef）：当前剧本包场景定义。
+    出参：bool，匹配成功返回 True。
+    异常：不抛异常；无 exits 或字段缺失时保守返回 False。
+    """
+    normalized = location_id.strip().lower()
+    for exit_def in pack_scene.exits:
+        if exit_def.target_scene_id == location_id:
+            return True
+        if exit_def.label.strip().lower() == normalized:
+            return True
+        if any(alias.strip().lower() == normalized for alias in exit_def.aliases):
+            return True
+    return False
+
+
+def _build_pack_exit_locked_message(exit_def: Any) -> str:
+    """
+    功能：把剧本包出口条件失败转换为玩家可读的失败原因，避免暴露内部 flag 名。
+    入参：exit_def（Any）：匹配到但 conditions 未满足的 Story Pack 出口定义。
+    出参：str，中文失败提示，可直接进入 validation_errors。
+    异常：不抛异常；label 缺失时使用通用“该方向”降级。
+    """
+    label = str(getattr(exit_def, "label", "") or "该方向").strip()
+    return f"现在还不能{build_move_action_text(label)}，先完成当前线索再继续。"
+
+
 def is_reachable_location(state: Mapping[str, Any], location_id: str) -> bool:
     """
     功能：判断目标地点是否属于当前场景出口，用于阻止 NLU 生成越界移动。
@@ -184,11 +217,15 @@ def _validate_move(
     state: Mapping[str, Any],
     action: Mapping[str, Any],
     errors: list[str],
+    pack_scene: StoryPackSceneDef | None = None,
 ) -> dict[str, Any] | None:
     """
-    功能：执行移动动作校验，目标缺失时返回澄清结果，越界目标追加错误。
+    功能：执行移动动作校验。剧本包场景出口优先匹配，目标缺失时返回澄清结果，
+        条件未满足或越界目标追加错误。
     入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：当前回合状态；
-        action（dict[str, Any]）：候选动作；errors（list[str]）：外部错误列表。
+        action（dict[str, Any]）：候选动作；errors（list[str]）：外部错误列表；
+        pack_scene（StoryPackSceneDef | None，默认 None）：当前剧本包场景定义，
+        None 时仅走 DB 出口校验。
     出参：dict[str, Any] | None，需澄清时返回主循环补丁，否则返回 None。
     异常：不抛业务异常；澄清路径走受控降级。
     """
@@ -199,14 +236,20 @@ def _validate_move(
         return clarification_result(
             clarify_with_agent(loop, state, action, build_move_clarification(state))
         )
+    # 剧本包出口优先：出口存在但 conditions 未满足时必须在校验层拦截，
+    # 防止结算层继续写入一个剧情上尚未解锁的场景位置。
+    if pack_scene is not None:
+        matched_exit = _find_pack_exit(str(location_id), pack_scene)
+        if matched_exit is not None:
+            if not _check_exit_conditions(matched_exit, state):
+                errors.append(_build_pack_exit_locked_message(matched_exit))
+            return None
     if not is_reachable_location(state, str(location_id)):
         errors.append("目标地点不在当前场景出口中")
     return None
 
 
-def _validate_sandbox_action(
-    state: Mapping[str, Any], action_type: Any, errors: list[str]
-) -> None:
+def _validate_sandbox_action(state: Mapping[str, Any], action_type: Any, errors: list[str]) -> None:
     """
     功能：校验沙盒控制动作仅在沙盒模式下可执行。
     入参：state（dict[str, Any]）：当前回合状态；action_type（Any）：动作类型；
@@ -250,10 +293,16 @@ def _validate_use_item(
     return None
 
 
-def validate_action_sync(loop: Any, state: Mapping[str, Any]) -> dict[str, Any]:
+def validate_action_sync(
+    loop: Any,
+    state: Mapping[str, Any],
+    pack_scene: StoryPackSceneDef | None = None,
+) -> dict[str, Any]:
     """
     功能：同步执行动作校验逻辑；所有候选动作必须在这里完成确定性合法性确认。
-    入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：候选动作与场景状态。
+    入参：loop（Any）：MainEventLoop 实例；state（dict[str, Any]）：候选动作与场景状态；
+        pack_scene（StoryPackSceneDef | None，默认 None）：当前剧本包场景定义，
+        None 时仅走 DB/场景快照出口校验。
     出参：dict[str, Any]，包含 is_valid 与 validation_errors。
     异常：数据库只读探针异常向上抛出；校验失败通过 errors 返回，不抛业务异常。
     """
@@ -287,7 +336,7 @@ def validate_action_sync(loop: Any, state: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     _validate_attack(loop, action, errors)
-    move_result = _validate_move(loop, state, action, errors)
+    move_result = _validate_move(loop, state, action, errors, pack_scene=pack_scene)
     if move_result is not None:
         return move_result
     _validate_sandbox_action(state, action_type, errors)

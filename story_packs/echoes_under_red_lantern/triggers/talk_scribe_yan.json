@@ -1,0 +1,19 @@
+{
+  "trigger_id": "talk_scribe_yan",
+  "type": "talk",
+  "label": "书吏的缺页",
+  "description": "燕书吏承认祭船失踪夜的账册被人抽走过一页，补强第二艘船线索。",
+  "effects": [
+    "narrative",
+    "set_flag"
+  ],
+  "conditions": {
+    "scene_id": "ledgers_room",
+    "interaction_id": "talk_scribe_yan",
+    "flag": "scribe_yan_missing_page",
+    "narrative_text": "燕书吏压低声音说，那晚账册少了一页，第二天又被人塞回来；纸边还带着赤灯巷的灯油味。",
+    "memory_text": "燕书吏证实祭船失踪夜账册曾缺页，纸边留有赤灯巷灯油味。"
+  },
+  "once": true,
+  "priority": 75
+}

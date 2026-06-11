@@ -10,6 +10,7 @@ import logging
 import random
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,6 +28,7 @@ from game_workflows.async_watchers import (
     WorkflowOuterLoopBridge,
 )
 from game_workflows.graph_schema import CharacterState, FlowState, SceneExitState, SceneSnapshot
+from game_workflows.lore_loader import load_pack_context
 from game_workflows.main_loop_config import load_main_loop_rules
 from game_workflows.main_loop_outer_helpers import (
     emit_outer_events,
@@ -79,9 +81,14 @@ from game_workflows.main_loop_validation_helpers import (
 from game_workflows.main_loop_validation_helpers import (
     validate_action_sync as validate_action_sync_helper,
 )
+from game_workflows.pack_runtime import PackRuntimeContext
+from game_workflows.quest_state_helpers import dump_quest_states, normalize_quest_states
 from game_workflows.rag_readonly_bridge import RAGReadOnlyBridge
+from state.contracts.quest import QuestRuntimeState
+from state.contracts.story_pack import StoryPackBundle, StoryPackSceneDef
 from state.contracts.turn import TurnRequestContext
 from tools.entity.entity_probes import EntityProbes
+from tools.packs.registry import StoryPackRegistry
 from tools.sqlite_db.db_updater import DBUpdater
 
 ensure_runtime_logging()
@@ -90,6 +97,67 @@ _NARRATIVE_STREAM_CALLBACK: ContextVar[Callable[[str], None] | None] = ContextVa
     "narrative_stream_callback",
     default=None,
 )
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    """
+    功能：规范化主循环输入中的字符串列表字段。
+    入参：value（Any）：期望为 list[str]，但可能来自会话元数据或外部脏值。
+    出参：list[str]，去空白、去重并保持首次出现顺序后的字符串列表。
+    异常：不抛异常；非列表输入返回空列表，非字符串或空字符串元素被跳过。
+    """
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        item = item.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
+@dataclass(frozen=True)
+class _RunInputContext:
+    """
+    功能：保存 run 入口参数被 request_context 覆盖后的有效输入。
+    入参：character_id（str）：运行角色；sandbox_mode（bool）：是否沙盒；
+        recent_memory（str）：会话近期记忆。
+    出参：_RunInputContext。
+    异常：数据类构造不做额外校验，调用方负责输入契约。
+    """
+
+    character_id: str
+    sandbox_mode: bool
+    recent_memory: str
+
+
+@dataclass(frozen=True)
+class _PackRunContext:
+    """
+    功能：保存本回合剧本包、触发器、任务和 lore 注入上下文。
+    入参：bundle（StoryPackBundle | None）：命中的剧本包；
+        pack_scene（StoryPackSceneDef | None）：当前场景；
+        scene_id（str）：场景 ID；recent_memory（str）：注入 lore 后的近期记忆；
+        session_meta（dict[str, Any]）：会话元数据；fired_trigger_ids（list[str]）：已触发 ID；
+        quest_states（list[QuestRuntimeState]）：任务运行态；pack_bundle_triggers/pack_bundle_quests：包内契约。
+    出参：_PackRunContext。
+    异常：数据类构造不做额外校验，调用方负责输入契约。
+    """
+
+    bundle: StoryPackBundle | None
+    pack_scene: StoryPackSceneDef | None
+    scene_id: str
+    recent_memory: str
+    session_meta: dict[str, Any]
+    fired_trigger_ids: list[str]
+    quest_states: list[QuestRuntimeState]
+    pack_bundle_triggers: dict[str, Any] | None
+    pack_bundle_quests: dict[str, Any] | None
 
 
 class MainEventLoop:
@@ -105,10 +173,12 @@ class MainEventLoop:
         db_updater: DBUpdater | None = None,
         entity_probes: EntityProbes | None = None,
         agent_context_dir: str | Path | None = None,
+        story_pack_registry: StoryPackRegistry | None = None,
     ):
         """
         功能：初始化对象状态与依赖。
-        入参：event_bus；rag_bridge；outer_bridge；db_updater；entity_probes；agent_context_dir。
+         入参：event_bus；rag_bridge；outer_bridge；db_updater；entity_probes；agent_context_dir；
+             story_pack_registry（StoryPackRegistry | None）：剧本包注册表，缺省 None。
         出参：无显式返回值约束（见调用方约定）。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
@@ -120,6 +190,7 @@ class MainEventLoop:
         self.db_updater = db_updater or DBUpdater()
         self.entity_probes = entity_probes or EntityProbes(db_path=self.db_updater.db_path)
         self.agent_context_dir = agent_context_dir
+        self.story_pack_registry = story_pack_registry
         rag_rules = self.rules.get("rag", {})
         self.rag_bridge = rag_bridge or RAGReadOnlyBridge(
             enabled=bool(rag_rules.get("read_only_enabled", True)),
@@ -202,7 +273,7 @@ class MainEventLoop:
         """
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default
 
     def _build_action_rng(self, state: FlowState) -> random.Random:
@@ -295,11 +366,12 @@ class MainEventLoop:
     def _validate_action_sync(self, state: FlowState) -> dict[str, Any]:
         """
         功能：同步执行动作校验逻辑；所有候选动作必须在这里完成确定性合法性确认。
-        入参：state（FlowState）：包含候选动作、角色状态、沙盒标记与场景快照。
+        入参：state（FlowState）：包含候选动作、角色状态、沙盒标记与场景快照；
+            可选字段 pack_scene 存在时优先走剧本包出口校验。
         出参：dict[str, Any]，包含 is_valid 与 validation_errors。
         异常：数据库只读探针异常向上抛出；校验失败通过 errors 返回，不抛业务异常。
         """
-        return validate_action_sync_helper(self, state)
+        return validate_action_sync_helper(self, state, pack_scene=state.get("pack_scene"))
 
     def _invalid_result(self, message: str) -> dict[str, Any]:
         """
@@ -377,7 +449,11 @@ class MainEventLoop:
         出参：dict[str, Any]，包含 physics_diff，供写计划消费。
         异常：事件总线钩子或只读查询异常向上抛出，由主循环调用方处理。
         """
-        return resolve_action_sync_helper(self, state)
+        return resolve_action_sync_helper(
+            self,
+            state,
+            pack_runtime=PackRuntimeContext.from_flow_state(state),
+        )
 
     async def resolve_action(self, state: FlowState) -> dict[str, Any]:
         """
@@ -439,8 +515,7 @@ class MainEventLoop:
             "final_response": output.narrative,
             "quick_actions": output.quick_actions,
             "quick_action_candidates": [
-                candidate.model_dump(mode="json")
-                for candidate in output.quick_action_candidates
+                candidate.model_dump(mode="json") for candidate in output.quick_action_candidates
             ],
             "failure_reason": output.failure_reason,
             "suggested_next_step": output.suggested_next_step,
@@ -451,12 +526,14 @@ class MainEventLoop:
         active_character: CharacterState | None,
         recent_memory: str = "",
         use_shadow: bool = False,
+        pack_scene: StoryPackSceneDef | None = None,
     ) -> SceneSnapshot | None:
         """
         功能：构造当前回合场景快照，供 NLU、校验、叙事和 Web 可操作提示共享。
         入参：active_character（CharacterState | None）：当前角色快照；
             recent_memory（str，默认空）：会话记忆摘要；
-            use_shadow（bool，默认 False）：是否读取 Shadow 世界状态。
+            use_shadow（bool，默认 False）：是否读取 Shadow 世界状态；
+            pack_scene（Any，默认 None）：剧本包解析出的场景定义，非空时覆盖配置默认场景。
         出参：SceneSnapshot | None，角色缺失时返回 None。
         异常：只读数据库异常向上抛出；地点定义缺失时使用配置降级场景，不中断回合。
         """
@@ -466,6 +543,7 @@ class MainEventLoop:
             active_character=active_character,
             recent_memory=recent_memory,
             use_shadow=use_shadow,
+            pack_scene=pack_scene,
         )
 
     def _normalize_scene_exits(self, raw_exits: Any) -> list[SceneExitState]:
@@ -540,6 +618,297 @@ class MainEventLoop:
             rules=self.rules,
         )
 
+    def _resolve_run_input_context(
+        self,
+        initial_character_id: str,
+        is_sandbox_mode: bool,
+        recent_memory: str,
+        request_context: TurnRequestContext | None,
+    ) -> _RunInputContext:
+        """
+        功能：解析 run 的有效入口参数，Web 请求上下文优先于直连参数。
+        入参：initial_character_id（str）：直连调用角色；
+            is_sandbox_mode（bool）：直连沙盒标记；recent_memory（str）：直连近期记忆；
+            request_context（TurnRequestContext | None）：Web 请求上下文。
+        出参：_RunInputContext，包含本回合最终角色、沙盒标记和近期记忆。
+        异常：不抛异常；request_context 字段契约由 Pydantic 保证。
+        """
+        if request_context is None:
+            return _RunInputContext(
+                character_id=initial_character_id,
+                sandbox_mode=is_sandbox_mode,
+                recent_memory=recent_memory,
+            )
+        return _RunInputContext(
+            character_id=request_context.character_id,
+            sandbox_mode=request_context.sandbox_mode,
+            recent_memory=request_context.recent_memory,
+        )
+
+    def _load_run_recent_memory(
+        self,
+        recent_memory: str,
+        request_context: TurnRequestContext | None,
+    ) -> str:
+        """
+        功能：合并 Web 长期记忆或本地 Agent 记忆，生成只读叙事上下文。
+        入参：recent_memory（str）：会话近期摘要；
+            request_context（TurnRequestContext | None）：请求上下文。
+        出参：str，供场景快照与 GM 渲染使用的记忆文本。
+        异常：load_agent_memory 内部按策略处理读取异常；本函数不额外捕获。
+        """
+        if request_context is not None and request_context.long_term_memory.strip():
+            agent_memory = request_context.long_term_memory
+        else:
+            agent_memory_session_id = (
+                request_context.session_id if request_context is not None else None
+            )
+            agent_memory = load_agent_memory(
+                self.agent_context_dir,
+                session_id=agent_memory_session_id,
+            )
+        # 上下文挂载边界：Web 路径优先使用 SQLite 长期记忆，直连路径才读 `.agent_context`；
+        # 该上下文只补充叙事，不写回 Web 会话摘要，也不参与动作合法性和确定性结算。
+        return merge_recent_memory(recent_memory, agent_memory)
+
+    def _build_pack_run_context(
+        self,
+        request_context: TurnRequestContext | None,
+        active_character: CharacterState | None,
+        recent_memory: str,
+    ) -> _PackRunContext:
+        """
+        功能：解析本回合剧本包场景、任务/触发器状态，并把 pack lore 注入叙事记忆。
+        入参：request_context（TurnRequestContext | None）：请求上下文；
+            active_character（CharacterState | None）：当前角色快照；
+            recent_memory（str）：已合并的近期记忆。
+        出参：_PackRunContext，包含 pack 场景、任务、触发器和可能被 lore 扩展后的记忆。
+        异常：注册表读取异常由 StoryPackRegistry 抛出；缺包或缺场景仅记录 warning 并降级。
+        """
+        pack_scene: StoryPackSceneDef | None = None
+        bundle: StoryPackBundle | None = None
+        scene_id = ""
+        story_pack_registry = self.story_pack_registry
+        story_pack_root: Path | None = None
+        if (
+            request_context is not None
+            and request_context.pack_id
+            and story_pack_registry is not None
+        ):
+            story_pack_root = story_pack_registry.root
+            bundle = story_pack_registry.get(request_context.pack_id)
+            if bundle is not None:
+                # 优先以 DB 中角色当前 location 作为场景 ID（后续回合）；
+                # 若 location 为 unknown 或空则退回 manifest.start_scene_id（首回合）。
+                scene_id = (
+                    active_character.get("location", "") if active_character is not None else ""
+                )
+                if not scene_id or scene_id == "unknown":
+                    scene_id = bundle.manifest.start_scene_id
+                pack_scene = bundle.scenes.get(scene_id)
+                if pack_scene is None:
+                    # 角色当前 location 不在剧本包场景集合内（例如 DB 种子数据残留），
+                    # 回退到包的起始场景，避免包内容无法注入。
+                    scene_id = bundle.manifest.start_scene_id
+                    pack_scene = bundle.scenes.get(scene_id)
+                    if pack_scene is None:
+                        logger.warning(
+                            "场景 %s 在剧本包 %s 中未找到，本轮跳过 pack 场景注入",
+                            scene_id,
+                            request_context.pack_id,
+                        )
+                    else:
+                        logger.info(
+                            "角色 location 不在包场景中，已回退到 start_scene_id：%s",
+                            scene_id,
+                        )
+            else:
+                logger.warning(
+                    "剧本包 %s 在注册表中未找到，本轮跳过 pack 场景注入",
+                    request_context.pack_id,
+                )
+        session_meta = (
+            dict(request_context.session_metadata)
+            if request_context is not None and isinstance(request_context.session_metadata, dict)
+            else {}
+        )
+        fired_trigger_ids = _normalize_string_list(session_meta.get("fired_trigger_ids", []))
+        quest_states: list[QuestRuntimeState] = []
+        pack_bundle_triggers: dict[str, Any] | None = None
+        pack_bundle_quests: dict[str, Any] | None = None
+        if bundle is not None:
+            pack_bundle_triggers = dict(bundle.triggers)
+            pack_bundle_quests = dict(bundle.quests)
+            quest_states = normalize_quest_states(
+                session_meta.get("quest_states", []),
+                pack_bundle_quests,
+            )
+            logger.debug(
+                "A2 trigger/quest: %d fired trigger ids, %d quest states",
+                len(fired_trigger_ids),
+                len(quest_states),
+            )
+            if story_pack_root is not None:
+                # A2 Lore 注入：将剧本包的 lore 与 persona 加载为叙事上下文，
+                # 注入到 recent_memory 开头，仅在叙事阶段影响 GM 输出，
+                # 不参与动作合法性、数值结算或状态写入。
+                lore_text = load_pack_context(bundle, story_pack_root)
+                if lore_text:
+                    recent_memory = (
+                        "\n".join([lore_text, recent_memory]) if recent_memory else lore_text
+                    )
+                    logger.debug("A2 lore: %d chars injected into recent_memory", len(lore_text))
+        return _PackRunContext(
+            bundle=bundle,
+            pack_scene=pack_scene,
+            scene_id=scene_id,
+            recent_memory=recent_memory,
+            session_meta=session_meta,
+            fired_trigger_ids=fired_trigger_ids,
+            quest_states=quest_states,
+            pack_bundle_triggers=pack_bundle_triggers,
+            pack_bundle_quests=pack_bundle_quests,
+        )
+
+    def _build_initial_flow_state(
+        self,
+        user_input: str,
+        run_input: _RunInputContext,
+        request_context: TurnRequestContext | None,
+        active_character: CharacterState | None,
+        scene_snapshot: SceneSnapshot | None,
+        pack_context: _PackRunContext,
+        quest_state_dicts: list[dict[str, Any]],
+    ) -> FlowState:
+        """
+        功能：构造 LangGraph 初始 FlowState，把入口参数、角色、场景和 pack 状态收束到一处。
+        入参：user_input（str）：玩家输入；run_input（_RunInputContext）：有效入口参数；
+            request_context（TurnRequestContext | None）：请求上下文；
+            active_character（CharacterState | None）：角色快照；
+            scene_snapshot（SceneSnapshot | None）：初始场景快照；
+            pack_context（_PackRunContext）：pack 上下文；
+            quest_state_dicts（list[dict[str, Any]]）：序列化任务状态。
+        出参：FlowState，供 graph.ainvoke 使用。
+        异常：DB 读取总回合数失败时向上抛出，表示运行时存储不可用。
+        """
+        initial_turn_id = self.db_updater.get_total_turns()
+        trace_id = request_context.trace_id if request_context is not None else ""
+        request_id = request_context.request_id if request_context is not None else ""
+        session_id = request_context.session_id if request_context is not None else ""
+        initial_quest_updates = (
+            [] if pack_context.session_meta.get("quest_states") else quest_state_dicts
+        )
+        return {
+            "user_input": user_input,
+            "active_character_id": run_input.character_id,
+            "action_intent": None,
+            "is_valid": active_character is not None,
+            "validation_errors": (
+                [] if active_character is not None else ["当前角色不存在，无法启动主循环"]
+            ),
+            "physics_diff": None,
+            "turn_id": initial_turn_id,
+            "runtime_turn_id": initial_turn_id,
+            "trace_id": trace_id,
+            "request_id": request_id,
+            "session_id": session_id,
+            "is_sandbox_mode": run_input.sandbox_mode,
+            "final_response": "",
+            "quick_actions": [],
+            "quick_action_candidates": [],
+            "write_results": [],
+            "failure_reason": "",
+            "suggested_next_step": "",
+            "world_snapshot": None,
+            "scene_snapshot": scene_snapshot,
+            "active_character": active_character,
+            "turn_outcome": "pending",
+            "clarification_question": "",
+            "should_advance_turn": True,
+            "should_write_story_memory": False,
+            "debug_trace": [],
+            "outer_emit_result": {"status": "skipped", "detail": {"mode": "not_executed"}},
+            "current_scene_id": pack_context.scene_id,
+            "pack_scene": pack_context.pack_scene,
+            "trigger_events": [],
+            "quest_states": quest_state_dicts,
+            "quest_updates": initial_quest_updates,
+            "fired_trigger_ids": pack_context.fired_trigger_ids,
+            "pack_runtime_errors": [],
+            "session_metadata": pack_context.session_meta,
+            "pack_bundle_triggers": pack_context.pack_bundle_triggers,
+            "pack_bundle_quests": pack_context.pack_bundle_quests,
+        }
+
+    def _normalize_run_result(
+        self,
+        result: FlowState,
+        pack_context: _PackRunContext,
+        recent_memory: str,
+        quest_state_dicts: list[dict[str, Any]],
+    ) -> FlowState:
+        """
+        功能：图执行结束后刷新角色/场景快照，并标准化 pack runtime 输出字段。
+        入参：result（FlowState）：graph.ainvoke 原始结果；
+            pack_context（_PackRunContext）：pack 上下文；
+            recent_memory（str）：最终叙事记忆；
+            quest_state_dicts（list[dict[str, Any]]）：初始任务状态。
+        出参：FlowState，字段已归一化，供 API 层直接消费。
+        异常：角色或场景只读探针异常向上抛出，调用方按主循环异常处理。
+        """
+        if pack_context.bundle is not None:
+            latest_scene_id = str(result.get("current_scene_id") or pack_context.scene_id)
+            latest_pack_scene = pack_context.bundle.scenes.get(latest_scene_id)
+            if latest_pack_scene is not None:
+                result["pack_scene"] = latest_pack_scene
+        if result.get("active_character_id"):
+            latest_character = self._build_character_state(
+                result["active_character_id"],
+                use_shadow=result.get("is_sandbox_mode", False),
+            )
+            result["active_character"] = latest_character
+            result["scene_snapshot"] = self._build_scene_snapshot(
+                latest_character,
+                recent_memory=recent_memory,
+                use_shadow=result.get("is_sandbox_mode", False),
+                pack_scene=result.get("pack_scene"),
+            )
+        result["runtime_turn_id"] = int(result.get("turn_id", 0))
+        result["trigger_events"] = normalize_dict_list_helper(result.get("trigger_events", []))
+        final_quest_states = normalize_dict_list_helper(
+            result.get("quest_states") or result.get("quest_updates") or quest_state_dicts
+        )
+        result["quest_states"] = final_quest_states
+        raw_quest_updates = result.get("quest_updates")
+        result["quest_updates"] = normalize_dict_list_helper(raw_quest_updates)
+        result["fired_trigger_ids"] = _normalize_string_list(
+            result.get("fired_trigger_ids", pack_context.fired_trigger_ids)
+        )
+        result["pack_runtime_errors"] = normalize_dict_list_helper(
+            result.get("pack_runtime_errors", [])
+        )
+        result["session_metadata"] = {
+            "fired_trigger_ids": result["fired_trigger_ids"],
+            "quest_states": result["quest_states"],
+        }
+        return result
+
+    async def _emit_outer_result(self, result: FlowState) -> None:
+        """
+        功能：根据外环桥接类型写入当前回合 outer_emit_result。
+        入参：result（FlowState）：已归一化的回合结果，会被原地补充 outer_emit_result。
+        出参：None。
+        异常：外环投递异常由 _emit_outer_events 内部降级或向上抛出，沿用原策略。
+        """
+        # A1 可验收要求：outer.emitted 必须反映当前回合可观测结果，
+        # 不能依赖 asyncio.run 结束后会被取消的后台任务。
+        if isinstance(self.outer_bridge, NoOpOuterLoopBridge):
+            result["outer_emit_result"] = {"status": "skipped", "detail": {"mode": "noop"}}
+        elif isinstance(self.outer_bridge, WorkflowOuterLoopBridge):
+            result["outer_emit_result"] = await self._emit_outer_events(result)
+        else:
+            result["outer_emit_result"] = await self._emit_outer_events(result)
+
     async def run(
         self,
         user_input: str,
@@ -559,86 +928,52 @@ class MainEventLoop:
         出参：FlowState，包含动作、结算、叙事和最新角色/场景状态。
         异常：图执行、数据库读写或事件投递异常按节点策略向上抛出或降级记录。
         """
-        if request_context is not None:
-            initial_character_id = request_context.character_id
-            is_sandbox_mode = request_context.sandbox_mode
-            recent_memory = request_context.recent_memory
-        agent_memory = load_agent_memory(self.agent_context_dir)
-        # 上下文挂载边界：`.agent_context` 只读补充 Agent 长期记忆，
-        # 不写回 Web 会话摘要，也不参与动作合法性和确定性结算。
-        recent_memory = merge_recent_memory(recent_memory, agent_memory)
-        active_character = self._build_character_state(
-            initial_character_id,
-            use_shadow=is_sandbox_mode,
+        run_input = self._resolve_run_input_context(
+            initial_character_id=initial_character_id,
+            is_sandbox_mode=is_sandbox_mode,
+            recent_memory=recent_memory,
+            request_context=request_context,
         )
-        if active_character is None and is_sandbox_mode:
-            active_character = self._build_character_state(initial_character_id, use_shadow=False)
+        recent_memory = self._load_run_recent_memory(run_input.recent_memory, request_context)
+        active_character = self._build_character_state(
+            run_input.character_id,
+            use_shadow=run_input.sandbox_mode,
+        )
+        if active_character is None and run_input.sandbox_mode:
+            active_character = self._build_character_state(run_input.character_id, use_shadow=False)
+        pack_context = self._build_pack_run_context(
+            request_context=request_context,
+            active_character=active_character,
+            recent_memory=recent_memory,
+        )
+        recent_memory = pack_context.recent_memory
         scene_snapshot = self._build_scene_snapshot(
             active_character,
             recent_memory=recent_memory,
-            use_shadow=is_sandbox_mode,
+            use_shadow=run_input.sandbox_mode,
+            pack_scene=pack_context.pack_scene,
         )
-        initial_turn_id = self.db_updater.get_total_turns()
-        trace_id = request_context.trace_id if request_context is not None else ""
-        request_id = request_context.request_id if request_context is not None else ""
-        session_id = request_context.session_id if request_context is not None else ""
-        initial_state: FlowState = {
-            "user_input": user_input,
-            "active_character_id": initial_character_id,
-            "action_intent": None,
-            "is_valid": active_character is not None,
-            "validation_errors": (
-                []
-                if active_character is not None
-                else ["当前角色不存在，无法启动主循环"]
-            ),
-            "physics_diff": None,
-            "turn_id": initial_turn_id,
-            "runtime_turn_id": initial_turn_id,
-            "trace_id": trace_id,
-            "request_id": request_id,
-            "session_id": session_id,
-            "is_sandbox_mode": is_sandbox_mode,
-            "final_response": "",
-            "quick_actions": [],
-            "quick_action_candidates": [],
-            "write_results": [],
-            "failure_reason": "",
-            "suggested_next_step": "",
-            "world_snapshot": None,
-            "scene_snapshot": scene_snapshot,
-            "active_character": active_character,
-            "turn_outcome": "pending",
-            "clarification_question": "",
-            "should_advance_turn": True,
-            "should_write_story_memory": False,
-            "debug_trace": [],
-            "outer_emit_result": {"status": "skipped", "detail": {"mode": "not_executed"}},
-        }
+        quest_state_dicts = dump_quest_states(pack_context.quest_states)
+        initial_state = self._build_initial_flow_state(
+            user_input=user_input,
+            run_input=run_input,
+            request_context=request_context,
+            active_character=active_character,
+            scene_snapshot=scene_snapshot,
+            pack_context=pack_context,
+            quest_state_dicts=quest_state_dicts,
+        )
         stream_token = _NARRATIVE_STREAM_CALLBACK.set(narrative_stream_callback)
         try:
             result_raw = await self.graph.ainvoke(initial_state)
         finally:
             _NARRATIVE_STREAM_CALLBACK.reset(stream_token)
         result = cast(FlowState, result_raw)
-        if result.get("active_character_id"):
-            latest_character = self._build_character_state(
-                result["active_character_id"],
-                use_shadow=result.get("is_sandbox_mode", False),
-            )
-            result["active_character"] = latest_character
-            result["scene_snapshot"] = self._build_scene_snapshot(
-                latest_character,
-                recent_memory=recent_memory,
-                use_shadow=result.get("is_sandbox_mode", False),
-            )
-        result["runtime_turn_id"] = int(result.get("turn_id", 0))
-        # A1 可验收要求：outer.emitted 必须反映当前回合可观测结果，
-        # 不能依赖 asyncio.run 结束后会被取消的后台任务。
-        if isinstance(self.outer_bridge, NoOpOuterLoopBridge):
-            result["outer_emit_result"] = {"status": "skipped", "detail": {"mode": "noop"}}
-        elif isinstance(self.outer_bridge, WorkflowOuterLoopBridge):
-            result["outer_emit_result"] = await self._emit_outer_events(result)
-        else:
-            result["outer_emit_result"] = await self._emit_outer_events(result)
+        result = self._normalize_run_result(
+            result=result,
+            pack_context=pack_context,
+            recent_memory=recent_memory,
+            quest_state_dicts=quest_state_dicts,
+        )
+        await self._emit_outer_result(result)
         return result

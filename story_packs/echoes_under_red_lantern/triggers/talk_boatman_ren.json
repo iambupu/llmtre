@@ -1,0 +1,19 @@
+{
+  "trigger_id": "talk_boatman_ren",
+  "type": "talk",
+  "label": "船夫的回避",
+  "description": "任伯承认三年前曾听见潮钟在不该响的时候响起。",
+  "effects": [
+    "narrative",
+    "set_flag"
+  ],
+  "conditions": {
+    "scene_id": "ferry_landing",
+    "interaction_id": "talk_boatman_ren",
+    "flag": "boatman_heard_wrong_bell",
+    "narrative_text": "任伯说三年前那夜没有风，船却自己离岸；更怪的是，潮钟在退潮前响了一下。",
+    "memory_text": "任伯提供证词：祭船失踪夜，潮钟曾在错误的潮时响起。"
+  },
+  "once": true,
+  "priority": 80
+}

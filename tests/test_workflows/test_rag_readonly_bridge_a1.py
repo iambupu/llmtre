@@ -1,3 +1,7 @@
+"""
+功能：覆盖 rag readonly bridge a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import pytest
@@ -30,10 +34,29 @@ def test_build_snapshot_auto_init_calls_update_index_when_docstore_missing(monke
     calls = {"ensure_sqlite": 0, "update_index": 0}
 
     class _FakeManager:
+        """
+        功能：提供 FakeManager 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeManager 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def update_index(self) -> None:
+            """
+            功能：提供 update index 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             calls["update_index"] += 1
 
         def query_lore_readonly(self, query: str) -> str:
+            """
+            功能：提供 query lore readonly 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return f"ctx:{query}"
 
     monkeypatch.setattr(
@@ -63,7 +86,20 @@ def test_build_snapshot_returns_error_payload_when_query_fails(monkeypatch) -> N
     """
 
     class _BrokenManager:
+        """
+        功能：提供 BrokenManager 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_BrokenManager 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def query_lore_readonly(self, _query: str) -> str:
+            """
+            功能：提供 query lore readonly 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             raise RuntimeError("vector unavailable")
 
     bridge = RAGReadOnlyBridge(enabled=True, auto_initialize=False)

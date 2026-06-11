@@ -1,18 +1,26 @@
+"""
+功能：覆盖 service and blueprints a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import logging
 import threading
 from collections.abc import Generator
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from flask import Flask
 
 from game_workflows.async_watchers import NoOpOuterLoopBridge, WorkflowOuterLoopBridge
+from state.contracts.story_pack import StoryPackAssetDef, StoryPackAssetPlaybackPolicy
 from state.tools.runtime_schema import ensure_runtime_tables
 from web_api.blueprints.memory import memory_blueprint
 from web_api.blueprints.runtime import runtime_blueprint
 from web_api.blueprints.sessions import sessions_blueprint
+from web_api.scene_assets import build_pack_asset_payloads
 from web_api.service import (
     ApiRuntimeContext,
     TurnExecutionError,
@@ -26,6 +34,7 @@ from web_api.service import (
     _load_turn_timeout_seconds,
     build_initial_turn_payload,
     build_memory,
+    build_turn_long_term_memory_context,
     ensure_character_available,
     get_play_state,
     get_runtime_context,
@@ -183,6 +192,20 @@ def api_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[Any]:
     db_path = str(tmp_path / "runtime_blueprints.db")
     _init_runtime_db(db_path)
     context = _BlueprintRuntimeContext(db_path)
+    context.agent_context_dir = str(tmp_path / ".agent_context")
+    pack_summary = SimpleNamespace(
+        pack_id="demo_a2_core",
+        scenario_id="default",
+        title="测试剧本",
+        version="0.1.0",
+        compiled_artifact_hash="test_hash",
+        start_scene_id="intro",
+    )
+    pack_bundle = SimpleNamespace(summary=pack_summary, quests={}, triggers={}, scenes={})
+    context.story_pack_registry = SimpleNamespace(
+        refresh=lambda: None,
+        get=lambda pack_id: pack_bundle if pack_id == "demo_a2_core" else None,
+    )
     context.session_store.create_session(
         session_id="sess_a1scope01",
         character_id="player_01",
@@ -201,7 +224,7 @@ def api_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[Any]:
     monkeypatch.setattr("web_api.blueprints.sessions.ensure_character_available", lambda _cid: True)
     monkeypatch.setattr(
         "web_api.blueprints.sessions.build_initial_turn_payload",
-        lambda _cid, _sandbox_mode: {
+        lambda _cid, _sandbox_mode, **_kwargs: {
             "active_character": {"id": "player_01", "inventory": []},
             "scene_snapshot": {"schema_version": "scene_snapshot.v2", "affordances": []},
             "final_response": "开场叙事",
@@ -214,7 +237,7 @@ def api_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[Any]:
     )
     monkeypatch.setattr(
         "web_api.blueprints.sessions.get_play_state",
-        lambda _cid, _sandbox_mode, recent_memory="": {
+        lambda _cid, _sandbox_mode, recent_memory="", **_kwargs: {
             "active_character": {"id": "player_01", "inventory": []},
             "scene_snapshot": {
                 "schema_version": "scene_snapshot.v2",
@@ -234,7 +257,12 @@ def test_sessions_create_and_get_detail(api_client) -> None:
     """
     create_resp = api_client.post(
         "/api/sessions",
-        json={"request_id": "req_a1sess01", "character_id": "player_01", "sandbox_mode": False},
+        json={
+            "request_id": "req_a1sess01",
+            "character_id": "player_01",
+            "pack_id": "demo_a2_core",
+            "sandbox_mode": False,
+        },
     )
     create_body = create_resp.get_json()
     assert create_resp.status_code == 201
@@ -283,16 +311,27 @@ def test_initialize_runtime_uses_configured_workflow_outer_bridge(
         异常：无。
         """
 
-        def __init__(self, event_bus: Any, outer_bridge: Any | None = None) -> None:
+        def __init__(
+            self,
+            event_bus: Any,
+            agent_context_dir: Any | None = None,
+            outer_bridge: Any | None = None,
+            story_pack_registry: Any = None,
+        ) -> None:
             """
             功能：保留构造入参并在未显式传桥时创建 WorkflowOuterLoopBridge。
-            入参：event_bus（Any）：事件总线；outer_bridge（Any | None，默认 None）：外环桥。
+            入参：event_bus（Any）：事件总线；
+                  agent_context_dir（Any | None，默认 None）：上下文目录；
+                  outer_bridge（Any | None，默认 None）：外环桥；
+                  story_pack_registry（Any，默认 None）：剧本包注册表。
             出参：None。
             异常：无。
             """
             self.event_bus = event_bus
+            self.agent_context_dir = agent_context_dir
             self.received_outer_bridge = outer_bridge
             self.outer_bridge = outer_bridge or WorkflowOuterLoopBridge()
+            self.story_pack_registry = story_pack_registry
 
     monkeypatch.setattr("web_api.service._ensure_runtime_ready", lambda: None)
     monkeypatch.setattr("web_api.service.EventBus", _FakeEventBus)
@@ -302,6 +341,7 @@ def test_initialize_runtime_uses_configured_workflow_outer_bridge(
     initialize_runtime(app)
     main_loop = app.extensions["tre_api_context"].main_loop
 
+    assert main_loop.agent_context_dir is None
     assert main_loop.received_outer_bridge is None
     assert isinstance(main_loop.outer_bridge, WorkflowOuterLoopBridge)
     assert not isinstance(main_loop.outer_bridge, NoOpOuterLoopBridge)
@@ -333,6 +373,10 @@ def test_memory_routes_cover_summary_raw_and_refresh(api_client) -> None:
     assert second_refresh.status_code == 200
     assert first_body["session_id"] == "sess_a1scope01"
     assert first_body["summary"] == second_body["summary"]
+    context = api_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    memory_path = Path(str(context.agent_context_dir)) / "sessions" / "sess_a1scope01" / "MEMORY.md"
+    assert memory_path.exists()
+    assert memory_path.read_text(encoding="utf-8").startswith("# 会话长期记忆")
 
 
 def test_runtime_reset_session_idempotent(api_client) -> None:
@@ -357,6 +401,10 @@ def test_runtime_reset_session_idempotent(api_client) -> None:
     assert first_body["reset"] is True
     assert first_body["current_session_turn_id"] == 0
     assert second_body["current_session_turn_id"] == 0
+    context = api_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
+    memory_path = Path(str(context.agent_context_dir)) / "sessions" / "sess_a1scope01" / "MEMORY.md"
+    assert memory_path.exists()
+    assert "有效剧情推进后自动写入" in memory_path.read_text(encoding="utf-8")
 
 
 def test_runtime_reset_rejects_when_sandbox_owner_mismatch(api_client) -> None:
@@ -404,11 +452,19 @@ def test_sessions_memory_runtime_idempotent_have_log_evidence(
 
     api_client.post(
         "/api/sessions",
-        json={"request_id": "req_a1idem_log01", "character_id": "player_01"},
+        json={
+            "request_id": "req_a1idem_log01",
+            "character_id": "player_01",
+            "pack_id": "demo_a2_core",
+        },
     )
     api_client.post(
         "/api/sessions",
-        json={"request_id": "req_a1idem_log01", "character_id": "player_01"},
+        json={
+            "request_id": "req_a1idem_log01",
+            "character_id": "player_01",
+            "pack_id": "demo_a2_core",
+        },
     )
     api_client.post(
         "/api/sessions/sess_a1scope01/memory/refresh",
@@ -427,22 +483,33 @@ def test_sessions_memory_runtime_idempotent_have_log_evidence(
         json={"request_id": "req_a1idem_log03", "keep_character": True},
     )
 
-    assert "create_session 幂等命中" in caplog.text
+    assert "create_session 幂等预命中" in caplog.text
     assert "refresh_memory 幂等命中" in caplog.text
     assert "reset_session 幂等命中" in caplog.text
 
 
 def test_log_post_body_fallback_has_log_evidence(caplog: pytest.LogCaptureFixture) -> None:
     """
-    功能：验证 POST 入参日志在 JSON 序列化失败时走 repr 降级，并留下日志证据。
+    功能：验证 POST 入参日志会输出脱敏摘要，并兼容不可 JSON 序列化字段。
     入参：caplog（pytest.LogCaptureFixture）：日志捕获器。
     出参：None。
-    异常：断言失败表示日志降级路径不可观测。
+    异常：断言失败表示日志脱敏或降级路径不可观测。
     """
     caplog.set_level(logging.INFO, logger="WebAPI.Runtime")
-    log_post_body("turns.create", {"request_id": "req_a1log01", "bad": {1, 2}})
-    assert "POST 请求体: route=turns.create" in caplog.text
+    log_post_body(
+        "turns.create",
+        {
+            "request_id": "req_a1log01",
+            "user_input": "秘密行动",
+            "persona_profile": {"bio": "不应落盘"},
+            "bad": {1, 2},
+        },
+    )
+    assert "POST 请求体摘要: route=turns.create" in caplog.text
     assert "bad" in caplog.text
+    assert "秘密行动" not in caplog.text
+    assert "不应落盘" not in caplog.text
+    assert '"redacted": true' in caplog.text
 
 
 def test_ensure_character_available_self_heal_has_warning_log(
@@ -458,13 +525,32 @@ def test_ensure_character_available_self_heal_has_warning_log(
     state = {"checks": 0}
 
     def fake_character_exists(character_id: str) -> bool:
+        """
+        功能：提供 fake character exists 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         state["checks"] += 1
         if character_id != "player_01":
             return False
         return state["checks"] >= 2
 
     class _FakeInitializer:
+        """
+        功能：提供 FakeInitializer 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeInitializer 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def initialize_db(self) -> None:
+            """
+            功能：提供 initialize db 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return None
 
     monkeypatch.setattr("web_api.service._character_exists", fake_character_exists)
@@ -504,15 +590,47 @@ def test_run_turn_timeout_has_error_log_evidence(
     """
 
     class _FakeMainLoop:
+        """
+        功能：提供 FakeMainLoop 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeMainLoop 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         async def run(self, **kwargs: Any) -> dict[str, Any]:
+            """
+            功能：提供 run 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return {"final_response": "unused"}
 
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = _FakeMainLoop()
 
     async def _raise_timeout(awaitable: Any, timeout: float) -> Any:
         # 降级路径：主动关闭协程，避免测试桩导致“协程未等待”告警污染验收日志。
+        """
+        功能：提供 raise timeout 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         awaitable.close()
         raise TimeoutError("timeout")
 
@@ -546,15 +664,47 @@ def test_run_turn_unexpected_error_has_log_evidence(
     """
 
     class _FakeMainLoop:
+        """
+        功能：提供 FakeMainLoop 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeMainLoop 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         async def run(self, **kwargs: Any) -> dict[str, Any]:
+            """
+            功能：提供 run 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return {"final_response": "unused"}
 
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = _FakeMainLoop()
 
     async def _raise_runtime_error(awaitable: Any, timeout: float) -> Any:
         # 降级路径：主动关闭协程，避免测试桩导致“协程未等待”告警污染验收日志。
+        """
+        功能：提供 raise runtime error 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         awaitable.close()
         raise RuntimeError("boom")
 
@@ -587,10 +737,29 @@ def test_get_play_state_and_build_initial_turn_payload_cover_main_paths(
     """
 
     class _FakeGMAgent:
+        """
+        功能：提供 FakeGMAgent 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeGMAgent 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def render(self, state: dict[str, Any]) -> str:
+            """
+            功能：提供 render 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return f"开场:{state['action_intent']['type']}"
 
         def suggest_quick_actions(self, state: dict[str, Any], final_response: str) -> list[str]:
+            """
+            功能：提供 suggest quick actions 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return ["观察周围", final_response]
 
         def suggest_quick_action_candidates(
@@ -599,34 +768,164 @@ def test_get_play_state_and_build_initial_turn_payload_cover_main_paths(
             final_response: str,
             quick_actions: list[str],
         ) -> list[Any]:
+            """
+            功能：提供 suggest quick action candidates 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return []
 
     class _FakeMainLoop:
+        """
+        功能：提供 FakeMainLoop 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeMainLoop 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.gm_agent = _FakeGMAgent()
+            self.rules = {}
 
         def _build_character_state(
             self,
             character_id: str,
             use_shadow: bool = False,
         ) -> dict[str, Any]:
-            return {"id": character_id, "inventory": ["health_potion_01"]}
+            """
+            功能：提供 build character state 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            return {
+                "id": character_id,
+                "inventory": ["health_potion_01"],
+                "location": "village_square",
+                "hp": 91,
+                "max_hp": 100,
+                "mp": 12,
+                "max_mp": 50,
+                "state_flags": ["moved_recently"],
+                "status_summary": "刚刚移动",
+                "status_effects": [{"key": "moved_recently", "label": "刚刚移动"}],
+                "status_context": {
+                    "resource_state": "stable",
+                    "flags": ["moved_recently"],
+                    "prompt_text": "刚刚移动",
+                },
+            }
 
         def _build_scene_snapshot(
             self,
             active_character: Any,
             recent_memory: str = "",
             use_shadow: bool = False,
+            pack_scene: Any | None = None,
         ) -> dict[str, Any]:
+            """
+            功能：提供 build scene snapshot 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            scene_id = (
+                str(pack_scene.get("scene_id"))
+                if isinstance(pack_scene, dict)
+                else str(active_character.get("location", "unknown"))
+            )
             return {
                 "schema_version": "scene_snapshot.v2",
                 "recent_memory": recent_memory,
+                "current_location": {"id": scene_id},
                 "affordances": [{"enabled": True, "user_input": "观察周围"}],
             }
 
+    class _FakeManifest:
+        """
+        功能：提供 FakeManifest 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeManifest 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        start_scene_id = "forest_edge"
+
+    class _FakeBundle:
+        """
+        功能：提供 FakeBundle 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeBundle 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        manifest = _FakeManifest()
+        scenes = {
+            "forest_edge": {"scene_id": "forest_edge"},
+            "village_square": {"scene_id": "village_square"},
+        }
+        quests = {
+            "find_the_key": {
+                "quest_id": "find_the_key",
+                "title": "寻找钥匙",
+                "description": "找到旧营地钥匙。",
+                "start_stage_id": "find_clue",
+                "stages": [
+                    {
+                        "stage_id": "find_clue",
+                        "label": "寻找线索",
+                        "description": "先确认营地留下的线索。",
+                    },
+                    {
+                        "stage_id": "unlock_gate",
+                        "label": "打开遗迹门",
+                        "description": "带着钥匙返回遗迹门。",
+                    },
+                ],
+            }
+        }
+
+    class _FakeRegistry:
+        """
+        功能：提供 FakeRegistry 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeRegistry 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        def get(self, pack_id: str) -> Any:
+            """
+            功能：提供 get 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            return _FakeBundle() if pack_id == "demo_a2_core" else None
+
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = _FakeMainLoop()
+            self.story_pack_registry = _FakeRegistry()
 
     monkeypatch.setattr("web_api.service.get_runtime_context", lambda: _FakeContext())
     monkeypatch.setattr(
@@ -643,23 +942,92 @@ def test_get_play_state_and_build_initial_turn_payload_cover_main_paths(
     play_state = get_play_state("player_01", sandbox_mode=False, recent_memory="上回合摘要")
     assert play_state["active_character"]["inventory_items"][0]["name"] == "治疗药水"
     assert play_state["scene_snapshot"]["schema_version"] == "scene_snapshot.v2"
+    pack_play_state = get_play_state(
+        "player_01",
+        sandbox_mode=False,
+        pack_id="demo_a2_core",
+        session_metadata={
+            "quest_states": [
+                {
+                    "quest_id": "find_the_key",
+                    "status": "active",
+                    "current_stage_id": "unlock_gate",
+                }
+            ]
+        },
+    )
+    active_quest = pack_play_state["scene_snapshot"]["active_quests"][0]
+    assert pack_play_state["scene_snapshot"]["current_location"]["id"] == "village_square"
+    assert active_quest["title"] == "寻找钥匙"
+    assert active_quest["status_label"] == "进行中"
+    assert active_quest["stage_label"] == "打开遗迹门"
+    assert active_quest["progress_label"] == "2/2"
 
     initial_payload = build_initial_turn_payload(
         "player_01",
         sandbox_mode=False,
         recent_memory="上回合摘要",
+        pack_id="demo_a2_core",
+        initial_location_id="forest_edge",
     )
     assert initial_payload["final_response"].startswith("开场:")
+    assert initial_payload["active_character"]["hp"] == 100
+    assert initial_payload["active_character"]["mp"] == 50
+    assert initial_payload["active_character"]["state_flags"] == []
+    assert initial_payload["active_character"]["status_summary"] == "状态稳定"
+    assert initial_payload["scene_snapshot"]["current_location"]["id"] == "forest_edge"
+    assert initial_payload["scene_snapshot"]["active_quests"][0]["stage_label"] == "寻找线索"
     assert initial_payload["quick_actions"][0] == "观察周围"
     assert initial_payload["outcome"] == "initial_scene"
 
 
+def test_build_pack_asset_payloads_includes_playback_policy() -> None:
+    """
+    功能：验证 Web 首屏场景资源 payload 会透传 Story Pack asset.playback 播放策略。
+    入参：无。
+    出参：None。
+    异常：断言失败表示前端无法收到音视频生命周期控制字段。
+    """
+    bundle = SimpleNamespace(
+        manifest=SimpleNamespace(
+            assets={
+                "intro_video": StoryPackAssetDef(
+                    kind="illustration",
+                    media_type="video",
+                    src="video/intro.mp4",
+                    playback=StoryPackAssetPlaybackPolicy(
+                        mode="loop",
+                        controls=False,
+                        muted=True,
+                        preload="auto",
+                        volume=0.25,
+                        start_time_seconds=1.0,
+                        end_time_seconds=5.0,
+                    ),
+                )
+            }
+        )
+    )
+
+    assets = build_pack_asset_payloads("demo_pack", bundle)
+
+    playback = assets["intro_video"]["playback"]
+    assert assets["intro_video"]["url"] == "/api/story-packs/demo_pack/assets/video/intro.mp4"
+    assert playback["mode"] == "loop"
+    assert playback["controls"] is False
+    assert playback["muted"] is True
+    assert playback["preload"] == "auto"
+    assert playback["volume"] == 0.25
+    assert playback["start_time_seconds"] == 1.0
+    assert playback["end_time_seconds"] == 5.0
+
+
 def test_quick_action_layout_drops_unmatched_actions() -> None:
     """
-    功能：验证快捷动作布局只接纳 enabled affordance，可疑文本仅进入诊断信息。
+    功能：验证场景快捷布局只接纳 enabled affordance，回合动态文案不覆盖公共快捷操作。
     入参：无，使用内联 scene_snapshot。
     出参：None。
-    异常：断言失败表示未授权 quick_action 又进入了可点击布局。
+    异常：断言失败表示回合内快捷动作又污染了场景公共布局。
     """
     scene_snapshot = {
         "current_location": {"id": "camp"},
@@ -686,17 +1054,19 @@ def test_quick_action_layout_drops_unmatched_actions() -> None:
 
     groups = _build_quick_action_groups(
         scene_snapshot,
-        ["观察周围", "凭空飞走", "前往森林"],
+        ["观察周围", "检查地精伤口的符文", "凭空飞走", "前往森林"],
     )
     layout = _build_quick_action_layout(
         scene_snapshot,
-        ["观察周围", "凭空飞走", "前往森林"],
+        ["观察周围", "检查地精伤口的符文", "凭空飞走", "前往森林"],
         [{"canonical_intent_key": "generic_action", "display_text": "凭空飞走"}],
     )
 
     assert groups == {"current": ["观察周围"], "nearby": ["前往森林"]}
     assert layout["common_actions"] == ["观察周围"]
     assert layout["object_actions"] == {"exit:forest": ["前往森林"]}
+    assert layout["diagnostics"]["unmatched_to_common"] == 0
+    assert "检查地精伤口的符文" in layout["diagnostics"]["unmapped_actions"]
     assert "凭空飞走" in layout["diagnostics"]["unmapped_actions"]
 
 
@@ -709,7 +1079,20 @@ def test_get_play_state_raises_when_main_loop_not_ready(monkeypatch: pytest.Monk
     """
 
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = None
 
     monkeypatch.setattr("web_api.service.get_runtime_context", lambda: _FakeContext())
@@ -741,11 +1124,37 @@ def test_get_play_state_raises_when_character_state_missing(
     """
 
     class _FakeMainLoop:
+        """
+        功能：提供 FakeMainLoop 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeMainLoop 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def _build_character_state(self, character_id: str, use_shadow: bool = False) -> None:
+            """
+            功能：提供 build character state 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return None
 
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = _FakeMainLoop()
 
     monkeypatch.setattr("web_api.service.get_runtime_context", lambda: _FakeContext())
@@ -765,7 +1174,20 @@ def test_build_initial_turn_payload_raises_when_main_loop_not_ready(
     """
 
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = None
 
     monkeypatch.setattr("web_api.service.get_runtime_context", lambda: _FakeContext())
@@ -871,18 +1293,49 @@ def test_ensure_runtime_schema_ready_executes_migration(monkeypatch: pytest.Monk
     calls = {"committed": False, "closed": False, "cursor_obj": object()}
 
     class _FakeConnection:
+        """
+        功能：提供 FakeConnection 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeConnection 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def cursor(self) -> object:
+            """
+            功能：提供 cursor 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return calls["cursor_obj"]
 
         def commit(self) -> None:
+            """
+            功能：提供 commit 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             calls["committed"] = True
 
         def close(self) -> None:
+            """
+            功能：提供 close 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             calls["closed"] = True
 
     seen = {"cursor": None}
 
     def _fake_ensure_runtime_tables(cursor: object) -> None:
+        """
+        功能：提供 fake ensure runtime tables 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         seen["cursor"] = cursor
 
     monkeypatch.setattr("web_api.service.sqlite3.connect", lambda _path: _FakeConnection())
@@ -906,11 +1359,30 @@ def test_ensure_vector_index_ready_has_log_evidence_for_init_flow(
     state = {"exists_calls": 0, "updated": False}
 
     def _fake_exists(_path: str) -> bool:
+        """
+        功能：提供 fake exists 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         state["exists_calls"] += 1
         return state["exists_calls"] >= 2
 
     class _FakeRAGManager:
+        """
+        功能：提供 FakeRAGManager 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeRAGManager 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def update_index(self) -> None:
+            """
+            功能：提供 update index 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             state["updated"] = True
 
     monkeypatch.setattr("web_api.service.os.path.exists", _fake_exists)
@@ -935,7 +1407,20 @@ def test_ensure_vector_index_ready_degrades_when_docstore_missing_after_update(
     """
 
     class _FakeRAGManager:
+        """
+        功能：提供 FakeRAGManager 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeRAGManager 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def update_index(self) -> None:
+            """
+            功能：提供 update index 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return None
 
     monkeypatch.setattr("web_api.service.os.path.exists", lambda _path: False)
@@ -958,6 +1443,13 @@ def test_ensure_vector_index_ready_skips_update_when_auto_initialize_disabled(
     state = {"updated": False}
 
     class _FakeRAGManager:
+        """
+        功能：提供 FakeRAGManager 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeRAGManager 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def update_index(self) -> None:
             """
             功能：测试桩，若被调用则标记异常路径命中。
@@ -991,7 +1483,20 @@ def test_ensure_vector_index_ready_degrades_when_update_index_raises(
     """
 
     class _BrokenRAGManager:
+        """
+        功能：提供 BrokenRAGManager 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_BrokenRAGManager 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def update_index(self) -> None:
+            """
+            功能：提供 update index 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             raise RuntimeError("index failed")
 
     monkeypatch.setattr("web_api.service.os.path.exists", lambda _path: False)
@@ -1061,6 +1566,77 @@ def test_build_memory_uses_summary_step_and_context_window(
     assert items[0]["session_turn_id"] == 3
     assert items[1]["session_turn_id"] == 5
 
+
+def test_build_turn_long_term_memory_context_uses_scene_relevance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能：验证 Web 回合开始前会按当前场景地点、NPC、任务构建长期记忆相关性过滤键。
+    入参：monkeypatch（pytest.MonkeyPatch）：替换只读 play_state。
+    出参：None。
+    异常：断言失败表示 GM 长期记忆检索没有使用当前场景。
+    """
+
+    class _FakeStore:
+        """
+        功能：提供 FakeStore 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeStore 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            self.relevance: dict[str, set[str]] | None = None
+
+        def build_narrative_memory_context(
+            self,
+            session_id: str,
+            limit: int = 8,
+            relevance: dict[str, set[str]] | None = None,
+        ) -> str:
+            """
+            功能：记录调用方传入的相关性过滤键。
+            入参：session_id；limit；relevance。
+            出参：str，固定上下文。
+            异常：无。
+            """
+            self.relevance = relevance
+            return "## 长期叙事记忆\n- 相关记忆"
+
+    store = _FakeStore()
+    monkeypatch.setattr(
+        "web_api.service.get_play_state",
+        lambda **_kwargs: {
+            "scene_snapshot": {
+                "current_location": {"id": "forest_edge"},
+                "visible_npcs": [{"entity_id": "ranger_ella"}],
+                "visible_items": [{"item_id": "silver_leaf"}],
+                "active_quests": [{"quest_id": "find_silver_leaf"}],
+            }
+        },
+    )
+
+    context = build_turn_long_term_memory_context(
+        context=SimpleNamespace(session_store=store),
+        session={"session_id": "sess_memory_ctx01", "memory_summary": "", "pack_id": ""},
+        character_id="player_01",
+        sandbox_mode=False,
+    )
+
+    assert "相关记忆" in context
+    assert store.relevance is not None
+    assert store.relevance["location"] == {"forest_edge"}
+    assert store.relevance["npc"] == {"ranger_ella"}
+    assert store.relevance["quest"] == {"find_silver_leaf"}
+    assert store.relevance["item"] == {"silver_leaf"}
+
+
 def test_run_turn_postprocess_malformed_result_records_failed_trace_stages(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -1073,13 +1649,39 @@ def test_run_turn_postprocess_malformed_result_records_failed_trace_stages(
     """
 
     class _FakeOuterBridge:
+        """
+        功能：提供 FakeOuterBridge 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeOuterBridge 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         pass
 
     class _FakeMainLoop:
+        """
+        功能：提供 FakeMainLoop 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeMainLoop 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.outer_bridge = _FakeOuterBridge()
 
         async def run(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ARG002
+            """
+            功能：提供 run 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return {
                 "active_character": "bad-type",
                 "scene_snapshot": "bad-type",
@@ -1098,7 +1700,20 @@ def test_run_turn_postprocess_malformed_result_records_failed_trace_stages(
             }
 
     class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             self.main_loop = _FakeMainLoop()
 
     monkeypatch.setattr("web_api.service.get_runtime_context", lambda: _FakeContext())
@@ -1122,7 +1737,116 @@ def test_run_turn_postprocess_malformed_result_records_failed_trace_stages(
     assert stages["scene.loaded"]["status"] == "failed"
     assert stages["nlu.parsed"]["status"] == "failed"
     assert stages["action.resolved"]["status"] == "skipped"
+    assert stages["pack.runtime"]["status"] == "ok"
     assert stages["state.updated"]["status"] == "skipped"
     assert stages["gm.rendered"]["status"] == "failed"
     assert stages["outer.emitted"]["status"] == "skipped"
     assert "TurnTrace[trc_post_001] stages=" in caplog.text
+
+
+def test_run_turn_exposes_pack_runtime_errors_in_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    功能：验证主循环返回的 pack_runtime_errors 会进入 API payload 与 TurnTrace。
+    入参：monkeypatch。
+    出参：None。
+    异常：断言失败表示剧本包运行期错误诊断在 Web 层丢失。
+    """
+
+    class _FakeOuterBridge:
+        """
+        功能：提供 FakeOuterBridge 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeOuterBridge 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        pass
+
+    class _FakeMainLoop:
+        """
+        功能：提供 FakeMainLoop 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeMainLoop 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            self.outer_bridge = _FakeOuterBridge()
+
+        async def run(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ARG002
+            """
+            功能：提供 run 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            return {
+                "active_character": {"id": "player_01", "inventory": []},
+                "scene_snapshot": {
+                    "schema_version": "scene_snapshot.v2",
+                    "current_location": {"id": "ferry_landing", "name": "渡口"},
+                    "affordances": [],
+                },
+                "action_intent": {"type": "observe"},
+                "physics_diff": {},
+                "is_valid": True,
+                "final_response": "你看见雾面翻起红光。",
+                "quick_actions": [],
+                "turn_outcome": "valid_action",
+                "should_advance_turn": True,
+                "should_write_story_memory": True,
+                "validation_errors": [],
+                "runtime_turn_id": 4,
+                "trigger_events": [],
+                "quest_updates": [],
+                "pack_runtime_errors": [
+                    {
+                        "stage": "pack.trigger_runtime",
+                        "error": "触发器定义反序列化失败: bad_trigger",
+                    }
+                ],
+                "outer_emit_result": {"status": "skipped", "detail": {"mode": "test"}},
+            }
+
+    class _FakeContext:
+        """
+        功能：提供 FakeContext 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_FakeContext 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
+        def __init__(self) -> None:
+            """
+            功能：实现测试替身的 __init__ 协议方法。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
+            self.main_loop = _FakeMainLoop()
+
+    monkeypatch.setattr("web_api.service.get_runtime_context", lambda: _FakeContext())
+    monkeypatch.setattr("web_api.service._load_item_catalog", lambda: {})
+
+    payload = run_turn(
+        session={"session_id": "sess_packerr01", "memory_summary": ""},
+        user_input="观察",
+        character_id="player_01",
+        sandbox_mode=False,
+        trace_id="trc_packerr_001",
+        request_id="req_packerr01",
+    )
+
+    stages = {stage["stage"]: stage for stage in payload["trace"]["stages"]}
+    assert payload["pack_runtime_errors"][0]["stage"] == "pack.trigger_runtime"
+    assert stages["pack.runtime"]["status"] == "failed"
+    assert stages["pack.runtime"]["detail"]["errors"] == payload["pack_runtime_errors"]
+    assert payload["trace"]["errors"][0]["stage"] == "pack.runtime"

@@ -1,0 +1,18 @@
+{
+  "trigger_id": "inspect_camp_firepit",
+  "type": "inspect",
+  "label": "翻看火坑灰烬",
+  "description": "玩家检查废弃营地的火坑灰烬时触发，发现一张烧焦的羊皮纸，上面残留模糊字迹。",
+  "effects": [
+    "narrative",
+    "grant_item"
+  ],
+  "conditions": {
+    "scene_id": "old_camp",
+    "interaction_id": "inspect_firepit",
+    "narrative_text": "灰烬里埋着一张烧焦的羊皮纸，边缘焦黑但中央仍可辨认——「三钥归位，石门始开」。",
+    "memory_text": "你在营地火坑中找到一张羊皮纸，上面写着关于石门和钥匙的线索。",
+    "item_id": "burnt_letter"
+  },
+  "once": true
+}

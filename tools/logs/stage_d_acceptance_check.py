@@ -1,3 +1,7 @@
+"""
+功能：检查 Stage D 验收所需的运行日志证据。
+"""
+
 from __future__ import annotations
 
 import json
@@ -252,16 +256,16 @@ def _run_restart_recovery() -> dict[str, Any]:
     )
     _assert_status(status, 200, body, "restart_turn_after")
     second_turn_id = int(body["session_turn_id"])
-    assert second_turn_id >= first_turn_id + 1, (
-        f"重启后回合未推进：first={first_turn_id}, second={second_turn_id}"
-    )
+    assert (
+        second_turn_id >= first_turn_id + 1
+    ), f"重启后回合未推进：first={first_turn_id}, second={second_turn_id}"
 
     status, body = _get_json(client_after, f"/api/sessions/{session_id}")
     _assert_status(status, 200, body, "restart_get_session_final")
     final_cursor = int(body["current_session_turn_id"])
-    assert final_cursor >= second_turn_id, (
-        f"重启后会话游标异常：final={final_cursor}, second={second_turn_id}"
-    )
+    assert (
+        final_cursor >= second_turn_id
+    ), f"重启后会话游标异常：final={final_cursor}, second={second_turn_id}"
 
     return {
         "session_id": session_id,

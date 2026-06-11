@@ -27,6 +27,7 @@ TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念�
 
 - **确定性逻辑优先**：动作合法性、数值结算和状态写入以后端规则与数据库为准。
 - **Agent 可降级**：NLU、GM、外环演化可接真实模型，也可降级到规则或模板路径。
+- **双轨工作流**：内环（LangGraph StateGraph 驱动的同步主循环）与外环（LlamaIndex Workflows 驱动的异步事件流）解耦运行，内环负责玩家回合响应，外环负责世界演化与异步补偿。
 - **双路 Web 接口**：同时提供普通 JSON 回合接口和 SSE 流式回合接口。
 - **结构化场景快照**：每回合返回地点、出口、可见对象、可用动作和推荐行动。
 - **可回滚沙盒**：支持 Active/Shadow 双表快照和 sandbox commit/discard。
@@ -42,6 +43,9 @@ TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念�
 - **MOD**：Modification，修改或扩展模块。
 - **SSE**：Server-Sent Events，服务器发送事件，用于流式响应。
 - **Active/Shadow**：主线状态表与沙盒状态表，用于隔离未并入主线的剧情变更。
+- **LangGraph**：基于状态图的同步工作流框架，用于内环回合处理主循环。
+- **Workflows**：LlamaIndex 提供的异步事件驱动工作流框架，用于外环世界演化与事件补偿。
+- **AST**：Abstract Syntax Tree，抽象语法树，用于任务脚本的安全白名单表达式求值。
 
 ## 架构与最小链路
 
@@ -49,8 +53,15 @@ TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念�
 
 - **资源层**：`docs/`、`mods/`、RAG 索引和外部模型配置。
 - **持久层**：SQLite、Pydantic 契约、Active/Shadow 双表快照。
-- **逻辑层**：主循环、事件总线、场景快照、确定性工具、外环桥接。
+- **逻辑层**：内环（LangGraph StateGraph 驱动的同步主循环）、事件总线、场景快照、确定性工具、外环桥接（LlamaIndex Workflows）。
 - **智能层**：NLUAgent、GMAgent、ClarifierAgent、演化 Agent。
+
+### 双轨工作流
+
+引擎采用双轨解耦架构：
+
+- **内环（Inner Loop）**：基于 LangGraph StateGraph 的同步回合处理循环，流程为 NLU → 场景构建 → GM 渲染 → 响应输出 → 动作结算。每个回合同步完成，直接返回结果给玩家。
+- **外环（Outer Loop）**：基于 LlamaIndex Workflows 的异步事件处理流，监听 `state_changed`、`turn_ended`、`world_evolution` 等事件，并发处理世界演化、记忆摘要、补偿重放等非即时任务。
 
 ### 最小回合链路
 
@@ -126,7 +137,7 @@ npm run build
 进一步说明：
 
 - 玩家游玩流程见 [PLAY_GUIDE.md](PLAY_GUIDE.md)。
-- `/app` 是当前推荐试玩入口；`/play` 保留用于兼容、对照和调试验收。
+- `/app` 是当前推荐试玩入口，支持 Story Pack 选择、预览、导入和非官方包删除；`/play` 保留用于兼容、对照和调试验收。
 
 ## 常用开发命令
 
@@ -142,6 +153,15 @@ python state/tools/db_initializer.py
 
 - 首次运行项目。
 - 数据库缺失或需要重置试玩状态。
+
+### A2 Story Pack 验收
+
+```bash
+python -m tools.packs.validate examples/story_packs/demo_a2_core
+python examples/demo_playthrough.py
+```
+
+`/app` 可选择用户导入的 pack 创建会话，也可导入 JSON 文件集合形式的自定义 pack。
 - 修改 `state/models/` 或 `state/data/` 后需要重建本地状态库。
 
 ### 导入知识库并重建索引
@@ -336,9 +356,10 @@ uv run python app.py
 
 - `AGENTS.md`：Agent 上下文分层、读写边界和协作规范
 - `OPS.md`：工具调用、数据流和错误记录规范
-- `MEMORY.md`：跨会话长期剧情摘要池
+- `MEMORY.md`：全局模板/兼容入口
+- `sessions/<session_id>/MEMORY.md`：每个游戏会话自己的长期剧情摘要文件
 
-运行时，主循环会只读加载 `.agent_context/MEMORY.md`，过滤空模板和占位注释后，与 Web 会话近期记忆合并到 `SceneSnapshot.recent_memory`。该内容只影响 Agent 叙事上下文，不参与动作合法性、数值判定或状态写入。
+运行时，主循环会按当前 `session_id` 只读加载 `.agent_context/sessions/<session_id>/MEMORY.md`，过滤空模板和占位注释后，与 Web 会话近期记忆合并到 `SceneSnapshot.recent_memory`。Web 回合成功写入、手动 memory refresh 和 reset 会同步该会话文件；该内容只影响 Agent 叙事上下文，不参与动作合法性、数值判定或状态写入。
 
 ### `config/rag_import_rules.json`
 
@@ -385,8 +406,6 @@ uv run python app.py
 - `docs/`：本地规则书与设定文档输入目录，默认被 Git 忽略
 - `knowledge_base/`：RAG 向量与图谱索引输出目录
 - `.agent_context/`：本地 Agent 上下文规范与长期叙事摘要
-- `.code_md/`：宏观架构设计文档
-- `.coding_docs/`：微观实现记录
 - `app.py`：Flask 开发服务启动入口
 - `pyproject.toml`：项目元数据、打包配置和 lint/type-check 配置
 
@@ -453,5 +472,5 @@ python -m tools.logs.check_runtime_logs
 
 ## 版本信息
 
-- 当前版本：A1（Alpha 1）
+- 当前版本：A2-Release 开发态（Story Pack 管理与演示收口）
 - 更新日志：见 [CHANGELOG.md](CHANGELOG.md)

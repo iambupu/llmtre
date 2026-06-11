@@ -1,3 +1,7 @@
+"""
+功能：检查主循环只读 RAG 集成是否可用。
+"""
+
 import asyncio
 
 from core.event_bus import EventBus

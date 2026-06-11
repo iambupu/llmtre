@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "playtest:red-lantern": "node scripts/redLanternUiPlaytest.mjs",
+    "playtest:a2-release-import": "node scripts/a2ReleaseImportPlaytest.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.7",

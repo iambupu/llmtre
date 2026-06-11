@@ -1,3 +1,7 @@
+"""
+功能：覆盖 a1 scene contracts 的回归测试。
+"""
+
 from __future__ import annotations
 
 from game_workflows.affordances import build_scene_interaction_model

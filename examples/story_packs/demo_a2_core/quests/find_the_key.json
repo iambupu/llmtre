@@ -1,0 +1,24 @@
+{
+  "quest_id": "find_the_key",
+  "title": "寻找石门之钥",
+  "description": "羊皮纸上写着「三钥归位，石门始开」。你需要找到钥匙打开遗迹石门，探索门后的秘密。",
+  "stages": [
+    {
+      "stage_id": "find_clue",
+      "label": "搜集线索",
+      "description": "在废弃营地或雾林边缘寻找关于石门钥匙的线索。",
+      "triggers_on_activate": []
+    },
+    {
+      "stage_id": "obtain_key",
+      "label": "获取钥匙",
+      "description": "根据线索找到并获取石门之钥。"
+    },
+    {
+      "stage_id": "return_key",
+      "label": "开启石门",
+      "description": "带着钥匙返回遗迹石门，嵌入钥匙打开石门。"
+    }
+  ],
+  "start_stage_id": "find_clue"
+}

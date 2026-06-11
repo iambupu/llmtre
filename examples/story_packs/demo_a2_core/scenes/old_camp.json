@@ -1,0 +1,35 @@
+{
+  "scene_id": "old_camp",
+  "display_name": "废弃营地",
+  "summary": "几顶塌陷帐篷围着熄灭的火坑，灰烬里仍埋着未烧完的羊皮纸。",
+  "exits": [
+    {
+      "target_scene_id": "forest_edge",
+      "label": "返回雾林边缘",
+      "aliases": ["南", "返回", "林口"]
+    },
+    {
+      "target_scene_id": "ruins_gate",
+      "label": "沿石阶前往遗迹门",
+      "aliases": ["东", "石阶", "遗迹"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_firepit",
+      "label": "翻看火坑灰烬",
+      "kind": "inspect",
+      "target_ref": "cold_firepit",
+      "aliases": ["火坑", "灰烬"]
+    },
+    {
+      "interaction_id": "talk_ranger_ella",
+      "label": "呼唤巡林人艾拉",
+      "kind": "talk",
+      "target_ref": "ranger_ella",
+      "aliases": ["艾拉", "巡林人"]
+    }
+  ],
+  "visible_npcs": ["ranger_ella"],
+  "visible_items": ["cold_firepit"]
+}

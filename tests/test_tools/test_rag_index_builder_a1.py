@@ -1,3 +1,7 @@
+"""
+功能：覆盖 rag index builder a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,10 +24,22 @@ class _FakeVectorBuilder:
     """
 
     def __init__(self, index_dir: str) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.index_dir = index_dir
         self.built_nodes: list[Any] = []
 
     def build(self, nodes: list[Any]) -> None:
+        """
+        功能：提供 build 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.built_nodes = nodes
 
 
@@ -36,11 +52,23 @@ class _FakeGraphBuilder:
     """
 
     def __init__(self, index_dir: str, config: dict[str, Any]) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.index_dir = index_dir
         self.config = config
         self.built_docs: list[Document] = []
 
     def build(self, docs: list[Document]) -> None:
+        """
+        功能：提供 build 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.built_docs = docs
 
 
@@ -53,10 +81,22 @@ class _FakeDirectoryReader:
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.args = args
         self.kwargs = kwargs
 
     def load_data(self) -> list[Document]:
+        """
+        功能：提供 load data 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         file_name = "default.txt"
         input_files = self.kwargs.get("input_files")
         if isinstance(input_files, list) and input_files:
@@ -73,9 +113,21 @@ class _FakeLLM:
     """
 
     def __init__(self, response: str | Exception) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.response = response
 
     def complete(self, prompt: str) -> str:
+        """
+        功能：提供 complete 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         if isinstance(self.response, Exception):
             raise self.response
         return self.response

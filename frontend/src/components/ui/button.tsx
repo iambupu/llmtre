@@ -41,27 +41,42 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
-  className,
-  variant = "default",
-  size = "default",
-  asChild = false,
-  ...props
-}: React.ComponentProps<"button"> &
+type ButtonProps = React.ComponentPropsWithoutRef<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
-  }) {
-  const Comp = asChild ? Slot.Root : "button"
+  }
 
-  return (
-    <Comp
-      data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
-    />
-  )
-}
+/**
+ * 功能：渲染项目统一样式按钮，并在 Radix asChild 组合模式中转发 ref。
+ * 入参：props（ButtonProps）：透传到底层 button 或 Slot；asChild 为 true 时由父级原语接管交互语义。
+ * 出参：ReactElement，渲染对应 UI 基础组件。
+ * 异常：不显式抛异常；非法属性由 React 或底层组件处理。
+ */
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  (
+    {
+      className,
+      variant = "default",
+      size = "default",
+      asChild = false,
+      ...props
+    },
+    ref
+  ) => {
+    const Comp = asChild ? Slot.Root : "button"
 
-export { Button, buttonVariants }
+    return (
+      <Comp
+        ref={ref}
+        data-slot="button"
+        data-variant={variant}
+        data-size={size}
+        className={cn(buttonVariants({ variant, size, className }))}
+        {...props}
+      />
+    )
+  }
+)
+Button.displayName = "Button"
+
+export { Button }

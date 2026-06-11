@@ -1,3 +1,7 @@
+"""
+功能：覆盖 dice roller a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from tools.roll.dice_roller import check_success, roll_d20, roll_d100, roll_dice

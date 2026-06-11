@@ -1,0 +1,16 @@
+{
+  "trigger_id": "inspect_dawn_bridge",
+  "type": "inspect",
+  "label": "清晨的桥面",
+  "description": "结局后检查晓桥，确认赤灯事件收束。",
+  "effects": ["narrative", "set_flag"],
+  "conditions": {
+    "scene_id": "dawn_causeway",
+    "interaction_id": "inspect_dawn_bridge",
+    "flag": "dawn_bridge_seen",
+    "narrative_text": "桥面留下细小盐晶，像有人把一整夜的话都晒干了。赤灯不再需要照路。",
+    "memory_text": "晓桥桥面留下盐晶，赤灯事件已经收束。"
+  },
+  "once": true,
+  "priority": 70
+}

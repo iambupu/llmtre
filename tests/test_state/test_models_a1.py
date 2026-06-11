@@ -1,3 +1,7 @@
+"""
+功能：覆盖 models a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import pytest

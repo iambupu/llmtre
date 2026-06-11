@@ -8,7 +8,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from state.contracts.quest import QuestRuntimeState
 from state.contracts.scene import SceneAffordance, SceneSnapshotV2
+from state.contracts.trigger import TriggerEvent
 
 
 class TurnTraceStage(BaseModel):
@@ -48,7 +50,9 @@ class TurnRequestContext(BaseModel):
     """
     功能：封装 Web 请求传给主循环的上下文，避免回合 ID 和 trace ID 混用。
     入参：trace_id/request_id/session_id（str）：请求元数据；character_id（str）：角色；
-        sandbox_mode（bool）：是否使用 Shadow；recent_memory（str）：会话记忆摘要。
+        sandbox_mode（bool）：是否使用 Shadow；recent_memory（str）：会话记忆摘要；
+        long_term_memory（str）：会话级长期叙事记忆上下文；
+        pack_id（str | None）：故事剧本包标识，可选。
     出参：TurnRequestContext。
     异常：字段类型非法时由 Pydantic 抛出 ValidationError。
     """
@@ -59,6 +63,9 @@ class TurnRequestContext(BaseModel):
     character_id: str
     sandbox_mode: bool = False
     recent_memory: str = ""
+    long_term_memory: str = ""
+    pack_id: str | None = None
+    session_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuntimeTurnResult(BaseModel):
@@ -78,7 +85,8 @@ class RuntimeTurnResult(BaseModel):
 class TurnResult(BaseModel):
     """
     功能：Web API 对外回合结果契约。
-    入参：包含会话回合号、运行回合号、叙事、场景、行动建议和诊断信息。
+    入参：包含会话回合号、运行回合号、叙事、场景、行动建议、触发器事件、
+        任务推进和诊断信息；可选剧本包元数据。
     出参：TurnResult。
     异常：字段类型非法时由 Pydantic 抛出 ValidationError。
     """
@@ -111,6 +119,9 @@ class TurnResult(BaseModel):
     debug_trace: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     trace: TurnTrace | None = None
+    trigger_events: list[TriggerEvent] = Field(default_factory=list)
+    quest_updates: list[QuestRuntimeState] = Field(default_factory=list)
+    pack_runtime_errors: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_outcome_side_effect_flags(self) -> TurnResult:

@@ -1,0 +1,19 @@
+{
+  "trigger_id": "talk_stone_mender_li",
+  "type": "talk",
+  "label": "石匠的沉默",
+  "description": "阿砺说明钟院石阶每年退潮时才会短暂露出。",
+  "effects": [
+    "narrative",
+    "set_flag"
+  ],
+  "conditions": {
+    "scene_id": "bell_courtyard",
+    "interaction_id": "talk_stone_mender_li",
+    "flag": "stone_mender_revealed_stairs",
+    "narrative_text": "阿砺说自己只负责补墙，不负责问死人为什么回来。他指向钟后：退潮够低时，石阶会自己露出来。",
+    "memory_text": "石匠阿砺确认钟后石阶会在退潮时露出。"
+  },
+  "once": true,
+  "priority": 75
+}

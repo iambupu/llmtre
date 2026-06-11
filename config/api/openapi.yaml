@@ -19,8 +19,36 @@ tags:
     description: 沙盒并入与回滚
   - name: Runtime
     description: 状态重置
+  - name: Mods
+    description: MOD 注册表与媒体物料
 paths:
   /api/sessions:
+    get:
+      tags: [Sessions]
+      summary: 列出会话摘要
+      description: 返回最近保存的 Web 会话摘要，供前端选择已有进度继续游戏。
+      operationId: listSessions
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSessionsResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
     post:
       tags: [Sessions]
       summary: 创建会话
@@ -61,6 +89,322 @@ paths:
                 $ref: "#/components/schemas/GetSessionResponse"
         "404":
           $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [Sessions]
+      summary: 删除会话数据
+      description: 删除指定 Web 会话、回合、长期记忆、会话级幂等缓存、会话运行角色克隆和 Agent 会话记忆镜像。
+      operationId: deleteSession
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      responses:
+        "200":
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteSessionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/story-packs:
+    get:
+      tags: [StoryPacks]
+      summary: 列出本地 Story Pack
+      description: 返回已通过 A2-Core 校验的本地 story_packs 摘要，以及未通过校验目录的诊断。
+      operationId: listStoryPacks
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListStoryPacksResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [StoryPacks]
+      summary: 导入 Story Pack
+      description: 接收 manifest、scenes、lore、quests、triggers JSON 文件集合，写入本地 story_packs 后立即校验；坏包不会进入可用列表。
+      operationId: importStoryPack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportStoryPackRequest"
+      responses:
+        "201":
+          description: 导入成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportStoryPackResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "409":
+          description: pack 已存在或受保护
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/story-packs/{pack_id}:
+    get:
+      tags: [StoryPacks]
+      summary: 获取 Story Pack 详情
+      description: 返回已校验 Story Pack 的 manifest、summary 与 scenes 预览。
+      operationId: getStoryPack
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]{3,64}$"
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetStoryPackResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          description: Story Pack 不存在或未通过校验
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [StoryPacks]
+      summary: 删除 Story Pack
+      description: 删除本地非官方 Story Pack 目录；不会删除历史 session。
+      operationId: deleteStoryPack
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]{3,64}$"
+      responses:
+        "200":
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteStoryPackResponse"
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          description: Story Pack 不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: 官方 pack 受保护
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/story-packs/{pack_id}/assets/{asset_path}:
+    get:
+      tags: [StoryPacks]
+      summary: 获取 Story Pack 多媒体物料
+      description: 只返回已通过校验且在 manifest.assets 中声明的 pack/assets 图片、GIF、视频或音频文件。
+      operationId: getStoryPackAsset
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]{3,64}$"
+        - name: asset_path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 媒体文件
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/webm:
+              schema:
+                type: string
+                format: binary
+            video/ogg:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            audio/ogg:
+              schema:
+                type: string
+                format: binary
+            audio/mp4:
+              schema:
+                type: string
+                format: binary
+            audio/flac:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          description: Story Pack 或媒体物料不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/mods/media:
+    get:
+      tags: [Mods]
+      summary: 列出启用 MOD 的媒体物料
+      description: 返回已启用 MOD 中通过扫描校验的 image/gif/video/audio 媒体声明及只读访问 URL。
+      operationId: listModMedia
+      responses:
+        "200":
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListModMediaResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/mods/{mod_id}/media/{media_path}:
+    get:
+      tags: [Mods]
+      summary: 获取 MOD 媒体文件
+      description: 只返回已启用 MOD 中 media_manifest 声明并通过扫描校验的 assets/ 媒体文件。
+      operationId: getModMedia
+      parameters:
+        - name: mod_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]{3,64}$"
+        - name: media_path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 媒体文件
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/webm:
+              schema:
+                type: string
+                format: binary
+            video/ogg:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            audio/ogg:
+              schema:
+                type: string
+                format: binary
+            audio/mp4:
+              schema:
+                type: string
+                format: binary
+            audio/flac:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          description: MOD 或媒体物料不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -118,6 +462,58 @@ paths:
                 $ref: "#/components/schemas/ListTurnsResponse"
         "404":
           $ref: "#/components/responses/SessionNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sessions/{session_id}/turns/stream:
+    post:
+      tags: [Turns]
+      summary: 执行一个回合（SSE 流式）
+      description: |
+        以 `text/event-stream` 返回回合执行进度与终止结果。
+        事件序列与实现保持一致：`received`、阶段 progress/detail、`gm_delta`、`done`、`error`。
+        终止语义：一次请求必须以 `done` 或 `error` 结束；`done` 负载与 `CreateTurnResponse` 同构。
+      operationId: createTurnStream
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTurnRequest"
+      responses:
+        "200":
+          description: |
+            流式执行成功建立连接。客户端需持续消费事件，直到收到 `done` 或 `error`。
+            `done` 的 data 负载与 `CreateTurnResponse` 字段同构（去掉外层 `ok` 包装）。
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                done:
+                  summary: 终止事件（成功）
+                  value: |
+                    event: done
+                    data: {"session_id":"sess_demo_01","session_turn_id":3,"runtime_turn_id":42,"trace_id":"trc_demo_01","request_id":"stream_0001","is_valid":true,"outcome":"valid_action","final_response":"你推开木门，听见屋内传来脚步声。"}
+                error:
+                  summary: 终止事件（失败）
+                  value: |
+                    event: error
+                    data: {"code":"INTERNAL_ERROR","message":"回合执行失败: ...","trace_id":"trc_demo_01"}
+        "400":
+          $ref: "#/components/responses/InvalidArgument"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/TurnConflict"
+        "504":
+          description: 回合执行超时（可能作为 SSE `error` 终止事件返回）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -409,6 +805,7 @@ components:
           type: string
           enum:
             - INVALID_ARGUMENT
+            - NO_STORY_PACK
             - SESSION_NOT_FOUND
             - CHARACTER_NOT_FOUND
             - TURN_NOT_FOUND
@@ -420,6 +817,13 @@ components:
             - SHADOW_STATE_NOT_FOUND
             - MODEL_UNAVAILABLE
             - TURN_TIMEOUT
+            - PACK_NOT_FOUND
+            - PACK_ALREADY_EXISTS
+            - PACK_IMPORT_FAILED
+            - ASSET_NOT_FOUND
+            - MOD_NOT_FOUND
+            - MEDIA_NOT_FOUND
+            - SERVER_ERROR
             - INTERNAL_ERROR
         message:
           type: string
@@ -452,6 +856,264 @@ components:
       additionalProperties:
         type: string
       description: 透传给服务端的会话附加元信息。
+
+    MediaPlaybackPolicy:
+      type: object
+      description: 音视频媒体生命周期控制策略；缺省时按手动播放处理。
+      properties:
+        mode:
+          type: string
+          enum: [manual, once, loop]
+          description: manual 为用户手动播放；once 为可见后播放一次；loop 为播放窗口内循环。
+        controls:
+          type: boolean
+          description: 是否显示浏览器原生媒体控件。
+        muted:
+          type: boolean
+          description: 是否静音。
+        preload:
+          type: string
+          enum: [none, metadata, auto]
+          description: 浏览器预加载策略。
+        volume:
+          type: number
+          minimum: 0
+          maximum: 1
+        start_time_seconds:
+          type: number
+          minimum: 0
+        end_time_seconds:
+          type: number
+          minimum: 0
+          nullable: true
+
+    ModMedia:
+      type: object
+      required: [mod_id, media_id, kind, src, url, mime_type]
+      properties:
+        mod_id:
+          type: string
+          description: 注册表中的 MOD ID。
+        media_id:
+          type: string
+          description: media_manifest 中的稳定媒体 ID。
+        kind:
+          type: string
+          enum: [image, gif, video, audio]
+        src:
+          type: string
+          description: 相对 mods/<mod_id>/assets 的媒体路径。
+        url:
+          type: string
+          description: 只读媒体访问 URL。
+        label:
+          type: string
+          nullable: true
+        alt:
+          type: string
+          nullable: true
+        caption:
+          type: string
+          nullable: true
+        mime_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        playback:
+          $ref: "#/components/schemas/MediaPlaybackPolicy"
+
+    ListModMediaResponse:
+      type: object
+      required: [ok, trace_id, media, diagnostics]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModMedia"
+        diagnostics:
+          type: object
+          additionalProperties: true
+
+    StoryPackSummary:
+      type: object
+      required:
+        - pack_id
+        - title
+        - version
+        - scenario_id
+        - start_scene_id
+        - start_scene_title
+        - compiled_artifact_hash
+        - scene_count
+        - interaction_count
+        - quest_count
+        - trigger_count
+        - asset_count
+        - diagnostics
+      properties:
+        pack_id:
+          type: string
+        title:
+          type: string
+        version:
+          type: string
+        scenario_id:
+          type: string
+        start_scene_id:
+          type: string
+        start_scene_title:
+          type: string
+          description: 起始场景面向玩家展示的名称；运行时仍以 start_scene_id 作为稳定引用。
+        compiled_artifact_hash:
+          type: string
+        source_background_hash:
+          type: string
+          nullable: true
+          description: 生成服务写入的背景来源 hash；手写 pack 可为空。
+        scene_count:
+          type: integer
+          minimum: 0
+        interaction_count:
+          type: integer
+          minimum: 0
+        quest_count:
+          type: integer
+          minimum: 0
+          description: A2-Plus 轻任务定义数量。
+        trigger_count:
+          type: integer
+          minimum: 0
+          description: A2-Plus 触发器定义数量。
+        asset_count:
+          type: integer
+          minimum: 0
+          description: Story Pack 多媒体物料数量。
+        diagnostics:
+          type: array
+          items:
+            type: string
+
+    ListStoryPacksResponse:
+      type: object
+      required: [ok, trace_id, packs, diagnostics]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        packs:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryPackSummary"
+        diagnostics:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+
+    GetStoryPackResponse:
+      type: object
+      required: [ok, trace_id, summary, manifest, scenes]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        summary:
+          $ref: "#/components/schemas/StoryPackSummary"
+        manifest:
+          type: object
+          additionalProperties: true
+        scenes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    ImportStoryPackRequest:
+      type: object
+      required: [manifest, scenes]
+      properties:
+        manifest:
+          type: object
+          additionalProperties: true
+          description: Story Pack manifest.json 内容，pack_id 必须与目标目录一致；manifest.assets 条目可声明 playback 控制音视频生命周期。
+        scenes:
+          oneOf:
+            - type: object
+              additionalProperties:
+                type: object
+                additionalProperties: true
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+          description: scenes/*.json 文件集合，可按 scene_id 对象映射或数组上传。
+        lore:
+          type: object
+          additionalProperties:
+            type: string
+          description: lore 文件名到文本内容的映射。
+        quests:
+          oneOf:
+            - type: object
+              additionalProperties:
+                type: object
+                additionalProperties: true
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+          description: 可选 quests/*.json 文件集合。
+        triggers:
+          oneOf:
+            - type: object
+              additionalProperties:
+                type: object
+                additionalProperties: true
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+          description: 可选 triggers/*.json 文件集合。
+        asset_files:
+          type: object
+          additionalProperties:
+            type: string
+          description: 可选 assets 多媒体文件集合，键为 assets/ 下相对路径，值为 base64 或 data URL。
+
+    ImportStoryPackResponse:
+      type: object
+      required: [ok, trace_id, summary]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        summary:
+          $ref: "#/components/schemas/StoryPackSummary"
+
+    DeleteStoryPackResponse:
+      type: object
+      required: [ok, trace_id, deleted_pack_id]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        deleted_pack_id:
+          type: string
 
     CharacterStatusEffect:
       type: object
@@ -524,18 +1186,46 @@ components:
       allOf:
         - $ref: "#/components/schemas/RequestWithIdempotency"
         - type: object
+          description: 新建会话必须提供 pack_id 或 background；background 会先生成合法 Story Pack，再按 pack 会话创建。
+          anyOf:
+            - required: [pack_id]
+            - required: [background]
           properties:
             character_id:
               $ref: "#/components/schemas/CharacterId"
             sandbox_mode:
               type: boolean
               default: false
+            pack_id:
+              type: string
+              description: A2 本地 Story Pack ID；新建会话必须提供 pack_id 或 background，显式 pack_id 优先于 background。
+            scenario_id:
+              type: string
+              nullable: true
+              default: default
+            background:
+              type: string
+              minLength: 1
+              maxLength: 2000
+              description: 自定义背景描述；未提供 pack_id 时，后端先生成 Story Pack，再把会话绑定到生成结果。
+            persona_profile:
+              type: object
+              additionalProperties: true
             metadata:
               $ref: "#/components/schemas/SessionMetadata"
     CreateSessionResponse:
       type: object
       required:
-        [ok, trace_id, session_id, character_id, sandbox_mode, created_at, current_session_turn_id]
+        [
+          ok,
+          trace_id,
+          session_id,
+          character_id,
+          runtime_character_id,
+          sandbox_mode,
+          created_at,
+          current_session_turn_id,
+        ]
       properties:
         ok:
           type: boolean
@@ -547,18 +1237,184 @@ components:
           $ref: "#/components/schemas/SessionId"
         character_id:
           $ref: "#/components/schemas/CharacterId"
+        runtime_character_id:
+          allOf:
+            - $ref: "#/components/schemas/CharacterId"
+          description: 会话专属运行角色 ID；后端用它读写 HP、MP、位置、背包等运行态。
         sandbox_mode:
           type: boolean
         current_session_turn_id:
           $ref: "#/components/schemas/SessionTurnId"
         created_at:
           $ref: "#/components/schemas/IsoTime"
+        pack_id:
+          type: string
+          nullable: true
+        scenario_id:
+          type: string
+          nullable: true
+        pack_version:
+          type: string
+          nullable: true
+        compiled_artifact_hash:
+          type: string
+          nullable: true
+        persona_profile:
+          type: object
+          additionalProperties: true
         active_character:
           $ref: "#/components/schemas/ActiveCharacter"
 
+    SessionSummary:
+      type: object
+      required:
+        [
+          session_id,
+          character_id,
+          runtime_character_id,
+          sandbox_mode,
+          current_session_turn_id,
+          created_at,
+          last_active_at,
+        ]
+      properties:
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        character_id:
+          $ref: "#/components/schemas/CharacterId"
+        base_character_id:
+          $ref: "#/components/schemas/CharacterId"
+        runtime_character_id:
+          allOf:
+            - $ref: "#/components/schemas/CharacterId"
+          description: 会话专属运行角色 ID；列表只展示，不作为跨会话写入依据。
+        sandbox_mode:
+          type: boolean
+        current_session_turn_id:
+          $ref: "#/components/schemas/SessionTurnId"
+        memory_summary:
+          type: string
+        pack_id:
+          type: string
+          nullable: true
+        pack_title:
+          type: string
+          nullable: true
+        scenario_id:
+          type: string
+          nullable: true
+        pack_version:
+          type: string
+          nullable: true
+        compiled_artifact_hash:
+          type: string
+          nullable: true
+        current_scene_id:
+          type: string
+          nullable: true
+        current_scene_title:
+          type: string
+          nullable: true
+        created_at:
+          $ref: "#/components/schemas/IsoTime"
+        last_active_at:
+          $ref: "#/components/schemas/IsoTime"
+        updated_at:
+          $ref: "#/components/schemas/IsoTime"
+
+    ListSessionsResponse:
+      type: object
+      required: [ok, trace_id, items, total, limit]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionSummary"
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+
+    DeleteSessionResponse:
+      type: object
+      required:
+        [
+          ok,
+          trace_id,
+          deleted_session_id,
+          runtime_character_id,
+          deleted_sessions,
+          deleted_turns,
+          deleted_memory_items,
+          deleted_idempotency_keys,
+          deleted_agent_memory,
+        ]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        deleted_session_id:
+          $ref: "#/components/schemas/SessionId"
+        character_id:
+          $ref: "#/components/schemas/CharacterId"
+        base_character_id:
+          $ref: "#/components/schemas/CharacterId"
+        runtime_character_id:
+          $ref: "#/components/schemas/CharacterId"
+        deleted_sessions:
+          type: integer
+          minimum: 0
+        deleted_turns:
+          type: integer
+          minimum: 0
+        deleted_memory_items:
+          type: integer
+          minimum: 0
+        deleted_idempotency_keys:
+          type: integer
+          minimum: 0
+        deleted_shadow_state:
+          type: boolean
+        runtime_character_owned:
+          type: boolean
+        deleted_entities_active:
+          type: integer
+          minimum: 0
+        deleted_inventory_active:
+          type: integer
+          minimum: 0
+        deleted_entities_shadow:
+          type: integer
+          minimum: 0
+        deleted_inventory_shadow:
+          type: integer
+          minimum: 0
+        deleted_agent_memory:
+          type: boolean
+
     GetSessionResponse:
       type: object
-      required: [ok, trace_id, session_id, character_id, sandbox_mode, current_session_turn_id, last_active_at]
+      required:
+        [
+          ok,
+          trace_id,
+          session_id,
+          character_id,
+          runtime_character_id,
+          sandbox_mode,
+          current_session_turn_id,
+          last_active_at,
+        ]
       properties:
         ok:
           type: boolean
@@ -569,12 +1425,31 @@ components:
           $ref: "#/components/schemas/SessionId"
         character_id:
           $ref: "#/components/schemas/CharacterId"
+        runtime_character_id:
+          allOf:
+            - $ref: "#/components/schemas/CharacterId"
+          description: 会话专属运行角色 ID；前端通常只展示，回合请求可继续使用 character_id。
         sandbox_mode:
           type: boolean
         current_session_turn_id:
           $ref: "#/components/schemas/SessionTurnId"
         last_active_at:
           $ref: "#/components/schemas/IsoTime"
+        pack_id:
+          type: string
+          nullable: true
+        scenario_id:
+          type: string
+          nullable: true
+        pack_version:
+          type: string
+          nullable: true
+        compiled_artifact_hash:
+          type: string
+          nullable: true
+        persona_profile:
+          type: object
+          additionalProperties: true
         active_character:
           $ref: "#/components/schemas/ActiveCharacter"
 
@@ -589,7 +1464,9 @@ components:
               minLength: 1
               maxLength: 500
             character_id:
-              $ref: "#/components/schemas/CharacterId"
+              allOf:
+                - $ref: "#/components/schemas/CharacterId"
+              description: 可传基准角色 ID 或当前 session 的 runtime_character_id；不得跨 session 使用。
             sandbox_mode:
               type: boolean
             memory:
@@ -639,6 +1516,32 @@ components:
           type: array
           items:
             type: string
+        quick_action_candidates:
+          type: array
+          description: GM 输出的结构化候选动作，供前端落桶与调试，不作为动作合法性来源。
+          items:
+            type: object
+            additionalProperties: true
+        quick_action_groups:
+          type: object
+          description: 后端按当前场景与临近场景分组后的快捷动作。
+          properties:
+            current:
+              type: array
+              items:
+                type: string
+            nearby:
+              type: array
+              items:
+                type: string
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        quick_action_layout:
+          type: object
+          description: 后端构造的对象交互布局，包含公共动作、对象动作与诊断信息。
+          additionalProperties: true
         affordances:
           type: array
           items:
@@ -674,6 +1577,36 @@ components:
           type: array
           items:
             type: string
+        trigger_events:
+          type: array
+          description: A2-Plus 当前回合由后端触发器系统评估出的事件。
+          items:
+            type: object
+            additionalProperties: true
+        quest_updates:
+          type: array
+          description: A2-Plus 当前回合返回的轻任务运行时状态更新。
+          items:
+            type: object
+            additionalProperties: true
+        pack_runtime_errors:
+          type: array
+          description: A2-Plus 剧本包触发器或任务运行期错误诊断；不由前端执行规则。
+          items:
+            type: object
+            additionalProperties: true
+        pack_quests:
+          type: array
+          description: 当前 session 绑定 Story Pack 的任务定义摘要；前端只展示，不执行任务逻辑。
+          items:
+            type: object
+            additionalProperties: true
+        pack_triggers:
+          type: array
+          description: 当前 session 绑定 Story Pack 的触发器定义摘要；前端只展示，不执行触发器。
+          items:
+            type: object
+            additionalProperties: true
 
     TurnSummary:
       type: object
@@ -856,7 +1789,8 @@ components:
               default: true
     ResetSessionResponse:
       type: object
-      required: [ok, trace_id, session_id, reset, current_session_turn_id]
+      required:
+        [ok, trace_id, session_id, reset, character_id, runtime_character_id, current_session_turn_id]
       properties:
         ok:
           type: boolean
@@ -868,5 +1802,11 @@ components:
         reset:
           type: boolean
           enum: [true]
+        character_id:
+          $ref: "#/components/schemas/CharacterId"
+        runtime_character_id:
+          allOf:
+            - $ref: "#/components/schemas/CharacterId"
+          description: 重置后继续使用的 session 专属运行角色 ID。
         current_session_turn_id:
           $ref: "#/components/schemas/SessionTurnId"

@@ -1,0 +1,15 @@
+{
+  "trigger_id": "enter_forest_edge_intro",
+  "type": "enter_scene",
+  "label": "进入雾林边缘",
+  "description": "玩家首次进入雾林边缘时触发，描述雾气弥漫的森林入口景象。",
+  "effects": [
+    "narrative"
+  ],
+  "conditions": {
+    "scene_id": "forest_edge",
+    "narrative_text": "旧路在湿冷薄雾中断开，树影像沉默的门柱守着林口。你隐约听见林深处有低沉的呼吸声。",
+    "memory_text": "你站在雾林边缘，前方通往废弃营地和石制遗迹门。"
+  },
+  "once": true
+}

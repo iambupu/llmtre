@@ -1,3 +1,7 @@
+"""
+功能：覆盖 db initializer and updater a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -15,8 +19,7 @@ def _init_db_for_updater(db_path: str) -> None:
     """
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS entities_active (
                 entity_id TEXT PRIMARY KEY,
                 hp INTEGER,
@@ -27,10 +30,8 @@ def _init_db_for_updater(db_path: str) -> None:
                 state_flags_json TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS entities_shadow (
                 entity_id TEXT PRIMARY KEY,
                 hp INTEGER,
@@ -41,61 +42,48 @@ def _init_db_for_updater(db_path: str) -> None:
                 state_flags_json TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS inventory_active (
                 owner_id TEXT,
                 item_id TEXT,
                 quantity INTEGER,
                 UNIQUE(owner_id, item_id)
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS inventory_shadow (
                 owner_id TEXT,
                 item_id TEXT,
                 quantity INTEGER,
                 UNIQUE(owner_id, item_id)
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS world_state_active (
                 key TEXT PRIMARY KEY,
                 value_json TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS world_state_shadow (
                 key TEXT PRIMARY KEY,
                 value_json TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS timeline (
                 id INTEGER PRIMARY KEY,
                 current_time_minutes INTEGER NOT NULL DEFAULT 0,
                 total_turns INTEGER NOT NULL DEFAULT 0
             )
-            """
-        )
-        cursor.execute(
-            """
+            """)
+        cursor.execute("""
             INSERT OR IGNORE INTO timeline(id, current_time_minutes, total_turns)
             VALUES(0, 0, 0)
-            """
-        )
+            """)
         conn.commit()
 
 
@@ -150,7 +138,7 @@ def test_apply_diff_clamps_resources_and_merges_state_flags(tmp_path) -> None:
             )
             VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
-            ("player_01", 5, 10, 1, 5, "loc_old", "[\"poisoned\"]"),
+            ("player_01", 5, 10, 1, 5, "loc_old", '["poisoned"]'),
         )
         conn.commit()
     updater = DBUpdater(db_path)
@@ -177,7 +165,7 @@ def test_apply_diff_clamps_resources_and_merges_state_flags(tmp_path) -> None:
     assert int(row[0]) == 0
     assert int(row[1]) == 5
     assert str(row[2]) == "loc_new"
-    assert str(row[3]) == "[\"poisoned\", \"buffed\"]"
+    assert str(row[3]) == '["poisoned", "buffed"]'
 
 
 def test_consume_item_covers_missing_update_and_delete_branch(tmp_path) -> None:
@@ -212,6 +200,46 @@ def test_consume_item_covers_missing_update_and_delete_branch(tmp_path) -> None:
             ("player_01", "potion"),
         ).fetchone()
     assert deleted is None
+
+
+def test_grant_item_inserts_accumulates_and_supports_shadow(tmp_path) -> None:
+    """
+    功能：验证 grant_item 能新增、累加库存，并按 sandbox 标记写入影子背包。
+    入参：tmp_path（pytest fixture）：临时目录。
+    出参：None。
+    异常：断言失败表示触发器授予物品的持久化路径退化。
+    """
+    db_path = str(tmp_path / "db_updater_grant.db")
+    _init_db_for_updater(db_path)
+    updater = DBUpdater(db_path)
+
+    assert updater.grant_item("", "letter") is False
+    assert updater.grant_item("player_01", "burnt_letter", quantity=2) is True
+    assert updater.grant_item("player_01", "burnt_letter", quantity=3) is True
+    assert (
+        updater.grant_item(
+            "player_01",
+            "shadow_letter",
+            quantity=1,
+            use_shadow=True,
+        )
+        is True
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        active_row = conn.execute(
+            "SELECT quantity FROM inventory_active WHERE owner_id = ? AND item_id = ?",
+            ("player_01", "burnt_letter"),
+        ).fetchone()
+        shadow_row = conn.execute(
+            "SELECT quantity FROM inventory_shadow WHERE owner_id = ? AND item_id = ?",
+            ("player_01", "shadow_letter"),
+        ).fetchone()
+
+    assert active_row is not None
+    assert int(active_row[0]) == 5
+    assert shadow_row is not None
+    assert int(shadow_row[0]) == 1
 
 
 def test_outer_event_failed_branches_retry_and_dead_letter(tmp_path) -> None:
@@ -403,7 +431,7 @@ def test_shadow_state_lifecycle_fork_merge_and_drop(tmp_path) -> None:
         )
         conn.execute(
             "INSERT INTO world_state_active(key, value_json) VALUES(?, ?)",
-            ("weather", "{\"state\":\"clear\"}"),
+            ("weather", '{"state":"clear"}'),
         )
         conn.commit()
     updater = DBUpdater(db_path)
@@ -449,19 +477,25 @@ def test_achievement_unlocks_are_inserted_once_and_queryable(tmp_path) -> None:
     updater = DBUpdater(db_path)
 
     assert updater.is_achievement_unlocked("player_01", "first_blood") is False
-    assert updater.record_achievement_unlock(
-        "player_01",
-        "first_blood",
-        "首次击败敌人",
-        reward={"mp_delta": 1},
-    ) is True
+    assert (
+        updater.record_achievement_unlock(
+            "player_01",
+            "first_blood",
+            "首次击败敌人",
+            reward={"mp_delta": 1},
+        )
+        is True
+    )
     assert updater.is_achievement_unlocked("player_01", "first_blood") is True
-    assert updater.record_achievement_unlock(
-        "player_01",
-        "first_blood",
-        "重复记录",
-        reward=None,
-    ) is False
+    assert (
+        updater.record_achievement_unlock(
+            "player_01",
+            "first_blood",
+            "重复记录",
+            reward=None,
+        )
+        is False
+    )
 
 
 def test_get_total_turns_returns_zero_when_timeline_missing(tmp_path) -> None:

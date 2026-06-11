@@ -1,3 +1,7 @@
+"""
+功能：覆盖 rag unified retriever a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -16,6 +20,12 @@ class _FakeNode:
     """
 
     def __init__(self, text: str) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self._text = text
         self.node_id = text
 
@@ -38,6 +48,12 @@ class _FakeNodeWithScore:
     """
 
     def __init__(self, text: str) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self.node = _FakeNode(text)
         self.score = 1.0
 
@@ -51,6 +67,12 @@ class _FakeRetriever:
     """
 
     def __init__(self, nodes: list[Any], raise_on_retrieve: bool = False) -> None:
+        """
+        功能：实现测试替身的 __init__ 协议方法。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         self._nodes = nodes
         self._raise_on_retrieve = raise_on_retrieve
 
@@ -91,6 +113,12 @@ def test_unified_retriever_cache_key_and_cache_refresh(monkeypatch) -> None:
     calls = {"build": 0}
 
     def _fake_build() -> str:
+        """
+        功能：提供 fake build 测试辅助逻辑。
+        入参：按函数签名接收 pytest fixture 或测试辅助参数。
+        出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
         calls["build"] += 1
         return f"hybrid_{calls['build']}"
 

@@ -12,7 +12,7 @@ profiles:
   llm:
     local_qwen_main:
       provider: "ollama"
-      model: "qwen3:8b"
+      model: "qwen3.5:9b"
       api_key: ""
       base_url: "http://localhost:11434"
       temperature: 0.2
@@ -29,16 +29,21 @@ profiles:
 
 bindings:
   agents.nlu:
-    enabled: true
-    mode: "rule_first"
-    llm_profile: "local_qwen_main"
+    enabled: false
+    mode: "deterministic"
+    llm_profile: null
 
   agents.gm:
-    enabled: true
-    mode: "llm_first"
-    llm_profile: "local_qwen_main"
+    enabled: false
+    mode: "deterministic"
+    llm_profile: null
 
   agents.evolution:
+    enabled: false
+    mode: "deterministic"
+    llm_profile: null
+
+  agents.story_pack_gen:
     enabled: false
     mode: "deterministic"
     llm_profile: null

@@ -22,16 +22,16 @@ def _eval_context() -> dict[str, Any]:
     return {
         "id": "player_01",
         "scene_snapshot": {
-            "current_location": {"id": "unknown", "name": "无名道路", "description": ""},
+            "current_location": {"id": "unknown", "name": "未绑定场景", "description": ""},
             "exits": [
                 {
                     "direction": "forward",
-                    "location_id": "forest_edge",
-                    "label": "森林边缘",
-                    "aliases": ["森林", "前方", "路上", "继续"],
+                    "location_id": "next_area",
+                    "label": "下一场景",
+                    "aliases": ["下一场景", "前方", "路上", "继续"],
                 }
             ],
-            "visible_npcs": [{"entity_id": "goblin_01", "name": "瘦弱的地精"}],
+            "visible_npcs": [{"entity_id": "npc_contact", "name": "场景联系人"}],
             "visible_items": [],
             "active_quests": [],
             "recent_memory": "",

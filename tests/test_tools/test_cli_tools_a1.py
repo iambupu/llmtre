@@ -1,3 +1,7 @@
+"""
+功能：覆盖 cli tools a1 的回归测试。
+"""
+
 from __future__ import annotations
 
 import json
@@ -122,13 +126,38 @@ async def test_replay_outer_outbox_coerce_and_dispatch_unknown_event() -> None:
         replay_outer_outbox._coerce_mapping([], "state_changed")
 
     class _Bridge:
+        """
+        功能：提供 Bridge 测试替身或辅助对象。
+        入参：无；类初始化参数由各方法或构造函数声明。
+        出参：_Bridge 类，用于承载测试替身或分组场景。
+        异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+        """
+
         async def emit_state_changed(self, event):  # noqa: ANN001
+            """
+            功能：提供 emit state changed 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return event
 
         async def emit_turn_ended(self, event):  # noqa: ANN001
+            """
+            功能：提供 emit turn ended 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return event
 
         async def emit_world_evolution(self, event):  # noqa: ANN001
+            """
+            功能：提供 emit world evolution 测试辅助逻辑。
+            入参：按函数签名接收 pytest fixture 或测试辅助参数。
+            出参：按测试辅助语义返回模拟值、上下文对象或 None；具体语义由调用断言约束。
+            异常：断言失败由 pytest 报告；未捕获异常表示被测路径回归。
+            """
             return event
 
     with pytest.raises(ValueError, match="不支持的 outbox 事件类型"):

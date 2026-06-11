@@ -1,0 +1,16 @@
+{
+  "trigger_id": "inspect_lantern_knots",
+  "type": "inspect",
+  "label": "三扣灯绳",
+  "description": "灯绳结法复现了潮誓的顺序。",
+  "effects": ["narrative", "set_flag"],
+  "conditions": {
+    "scene_id": "red_lantern_lane",
+    "interaction_id": "inspect_lantern_knots",
+    "flag": "three_knot_order_seen",
+    "narrative_text": "湿灯绳被打成三扣，每一扣都朝向不同方向：渡口、钟院、水下。它像一张不写字的路线图。",
+    "memory_text": "三扣灯绳给出路线顺序：渡口、钟院、水下。"
+  },
+  "once": true,
+  "priority": 70
+}

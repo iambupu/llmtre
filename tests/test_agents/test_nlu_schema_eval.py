@@ -1,3 +1,7 @@
+"""
+功能：覆盖 nlu schema eval 的回归测试。
+"""
+
 import json
 from pathlib import Path
 
@@ -7,6 +11,12 @@ from game_workflows.main_loop_config import load_main_loop_rules
 
 
 def _context() -> dict[str, object]:
+    """
+    功能：构建 NLU 规则优先评测用中性场景上下文。
+    入参：无。
+    出参：dict[str, object]，包含当前地点、出口、可见目标与可用动作。
+    异常：无显式异常；字面量构造失败时由 Python 运行时抛出。
+    """
     return {
         "id": "player_01",
         "scene_snapshot": {
@@ -18,12 +28,12 @@ def _context() -> dict[str, object]:
             "exits": [
                 {
                     "direction": "forward",
-                    "location_id": "forest_edge",
-                    "label": "森林边缘",
-                    "aliases": ["森林", "前方", "路上", "继续"],
+                    "location_id": "next_area",
+                    "label": "下一处区域",
+                    "aliases": ["前方", "路上", "继续"],
                 }
             ],
-            "visible_npcs": [{"entity_id": "goblin_01", "name": "瘦弱的地精"}],
+            "visible_npcs": [{"entity_id": "npc_contact", "name": "场景联系人"}],
             "visible_items": [],
             "active_quests": [],
             "recent_memory": "",
