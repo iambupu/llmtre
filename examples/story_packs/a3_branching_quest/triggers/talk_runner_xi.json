@@ -1,0 +1,23 @@
+{
+  "trigger_id": "talk_runner_xi",
+  "type": "talk",
+  "label": "暗中交易",
+  "description": "玩家与码头线人席舟交易，进入暗线取证路线。",
+  "effects": ["narrative", "grant_item", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "smuggler_quay",
+    "interaction_id": "talk_runner_xi",
+    "item_id": "quay_account_slip",
+    "quantity": 1,
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "active",
+    "target_stage_id": "strike_quay_bargain",
+    "a3_branch_group": "salt_deal_approach",
+    "branch_value": "strike_quay_bargain",
+    "flag": "branch_strike_quay_bargain",
+    "narrative_text": "席舟把账口纸塞进你袖中，要求你在封契库确认前不要惊动守备。暗线交易路线确立：账口更完整，但现场暂时无人保护。",
+    "memory_text": "你选择与码头线人暗中交易，获得私盐账口，代价是守备所暂未介入。"
+  },
+  "once": true,
+  "priority": 110
+}

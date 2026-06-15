@@ -1,0 +1,50 @@
+{
+  "scene_id": "watch_house",
+  "display_name": "守备所案房",
+  "summary": "案房的木桌上铺着城防图，云校尉把空白盐契压在铜镇纸下，等你说明来意。",
+  "exits": [
+    {
+      "target_scene_id": "market_square",
+      "label": "返回夜市",
+      "aliases": ["夜市", "返回", "南"]
+    },
+    {
+      "target_scene_id": "archive_hall",
+      "label": "进入封契库",
+      "aliases": ["封契库", "档案", "北"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "talk_captain_yun",
+      "label": "向云校尉公开证据",
+      "kind": "talk",
+      "target_ref": "captain_yun",
+      "aliases": ["云校尉", "公开证据", "守备"]
+    },
+    {
+      "interaction_id": "inspect_caseboard_after_report",
+      "label": "检查守备案板",
+      "kind": "inspect",
+      "target_ref": "watch_caseboard",
+      "aliases": ["案板", "城防图", "核对案板", "核对守备案板", "检查案板"]
+    }
+  ],
+  "visible_npcs": [
+    {
+      "id": "captain_yun",
+      "label": "云校尉",
+      "description": "守备所校尉，愿意立刻封锁码头，但会暴露你的调查方向。",
+      "aliases": ["云校尉", "校尉"]
+    }
+  ],
+  "visible_items": [
+    {
+      "id": "watch_caseboard",
+      "label": "守备案板",
+      "description": "案板记录巡逻路线和盐仓封条编号。",
+      "aliases": ["案板", "城防图"]
+    }
+  ],
+  "triggers": ["talk_captain_yun", "inspect_caseboard_after_report"]
+}

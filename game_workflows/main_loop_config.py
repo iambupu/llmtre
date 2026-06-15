@@ -44,6 +44,7 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
             "wait": ["等待", "坐一会", "停一会", "待一会", "wait"],
             "rest": ["休息", "小憩", "恢复", "rest"],
             "inspect": ["检查", "查看", "inspect", "搜索", "搜查", "翻找", "寻找"],
+            "skill": ["技能", "施放", "发动", "专注", "集中"],
             "use_item": ["喝下", "服用", "使用药水", "potion", "use", "使用"],
             "interact": [
                 "调查",
@@ -69,6 +70,7 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
         },
         "location_aliases": {},
         "item_aliases": {},
+        "skill_aliases": {"focus": ["专注", "集中", "focus"]},
     },
     "resolution": {
         "attack": {
@@ -80,6 +82,7 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
         },
         "move": {"state_flags_add": ["moved_recently"]},
         "talk": {"state_flags_add": ["conversation_started"]},
+        "skill": {"mp_delta": -3, "state_flags_add": ["skill_focus_used"]},
         "interact": {"state_flags_add": ["observed_surroundings"]},
         "commit_sandbox": {"state_flags_add": ["sandbox_merged"]},
         "discard_sandbox": {"state_flags_add": ["sandbox_discarded"]},
@@ -147,6 +150,12 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
                 "kind": "activity",
                 "severity": "info",
                 "description": "角色刚刚恢复片刻，叙事可体现状态回稳。",
+            },
+            "skill_focus_used": {
+                "label": "专注发动",
+                "kind": "skill",
+                "severity": "info",
+                "description": "角色刚发动专注技能，后续叙事可承接注意力集中。",
             },
             # 赤灯剧本线索状态：这些 flag 来自 Story Pack 触发器，必须在后端就变成玩家可读文案。
             "red_lantern_case_started": {
@@ -307,6 +316,7 @@ DEFAULT_MAIN_LOOP_RULES: dict[str, Any] = {
         "talk": "{actor_name}与 {target_id} 进行交谈。",
         "move": "{actor_name}前往了 {location_id}。",
         "use_item": "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。",
+        "skill": "{actor_name}发动了 {skill_id}，消耗了 {mp_cost} 点法力。",
         "interact": "{actor_name}仔细观察了周围环境。",
         "commit_sandbox": "{actor_name}将沙盒剧情并入了主线，当前世界状态已更新。",
         "discard_sandbox": "{actor_name}放弃了沙盒剧情，世界状态已回滚到主线。",

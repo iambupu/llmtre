@@ -8,6 +8,7 @@
       "wait": ["等待", "坐一会", "停一会", "待一会", "wait"],
       "rest": ["休息", "小憩", "恢复", "rest"],
       "inspect": ["检查", "查看", "inspect", "搜索", "搜查", "翻找", "寻找"],
+      "skill": ["技能", "施放", "发动", "专注", "集中"],
       "use_item": ["喝下", "服用", "使用药水", "potion", "use", "使用"],
       "interact": ["调查", "互动", "interact", "拾取", "捡起", "拿起", "打开", "关闭", "推开", "拉动", "触摸", "给予", "交给", "装备"],
       "commit_sandbox": ["并入主线", "合并沙盒", "确认并入"],
@@ -17,7 +18,12 @@
       "player_01": ["旅行者", "player"]
     },
     "location_aliases": {},
-    "item_aliases": {}
+    "item_aliases": {
+      "a3_field_ration": ["盐饼", "行粮", "补给", "现场盐饼"]
+    },
+    "skill_aliases": {
+      "focus": ["专注", "集中", "focus"]
+    }
   },
   "resolution": {
     "attack": {
@@ -32,6 +38,10 @@
     },
     "talk": {
       "state_flags_add": ["conversation_started"]
+    },
+    "skill": {
+      "mp_delta": -3,
+      "state_flags_add": ["skill_focus_used"]
     },
     "interact": {
       "state_flags_add": ["observed_surroundings"]
@@ -94,6 +104,7 @@
     "talk": "{actor_name}与 {target_id} 进行交谈。",
     "move": "{actor_name}前往了 {location_id}。",
     "use_item": "{actor_name}使用了 {item_id}，恢复了 {hp_delta} 点生命。",
+    "skill": "{actor_name}发动了 {skill_id}，消耗了 {mp_cost} 点法力。",
     "interact": "{actor_name}仔细观察了周围环境。",
     "observe": "{actor_name}观察周围：{scene_description}",
     "wait": "{actor_name}停下来片刻，留意周围的动静。",

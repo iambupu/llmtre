@@ -1,0 +1,21 @@
+{
+  "trigger_id": "talk_captain_yun",
+  "type": "talk",
+  "label": "公开交证据",
+  "description": "玩家向云校尉公开告示和盐箱证据，进入守备所路线。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "watch_house",
+    "interaction_id": "talk_captain_yun",
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "active",
+    "target_stage_id": "report_to_watch",
+    "a3_branch_group": "salt_deal_approach",
+    "branch_value": "report_to_watch",
+    "flag": "branch_report_to_watch",
+    "narrative_text": "云校尉接过蜡印拓片后立刻调人封锁旧码头。守备所路线确立：现场会被保护，但线人席舟很快会收到风声。",
+    "memory_text": "你选择公开把证据交给守备所，后果是码头被封锁，线人路线受压。"
+  },
+  "once": true,
+  "priority": 110
+}

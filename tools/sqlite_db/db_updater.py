@@ -630,23 +630,32 @@ class DBUpdater:
         finally:
             conn.close()
 
-    def enqueue_outer_event(self, event_name: str, payload: dict[str, object], error: str) -> int:
+    def enqueue_outer_event(
+        self,
+        event_name: str,
+        payload: dict[str, object],
+        error: str,
+        *,
+        attempts: int = 1,
+    ) -> int:
         """
         功能：执行 `enqueue_outer_event` 相关业务逻辑。
-        入参：event_name；payload；error。
+        入参：event_name；payload；error；attempts（int，默认 1）：已尝试投递次数，
+            直接入队等待异步重放时应传 0，失败降级补偿时保留 1。
         出参：int。
         异常：无显式捕获时向上抛出；如函数内有捕获，则按函数内降级策略处理。
         """
         payload_json = json.dumps(payload, ensure_ascii=False)
+        safe_attempts = max(0, int(attempts))
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO outer_event_outbox
                 (event_name, payload_json, status, attempts, last_error, next_retry_at, updated_at)
-                VALUES (?, ?, 'pending', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, 'pending', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                (event_name, payload_json, error),
+                (event_name, payload_json, safe_attempts, error),
             )
             conn.commit()
             lastrowid = cursor.lastrowid
@@ -666,7 +675,7 @@ class DBUpdater:
                 SELECT id, event_name, payload_json, attempts, last_error, status
                 FROM outer_event_outbox
                 WHERE status IN ('pending', 'retrying')
-                  AND datetime(next_retry_at) <= datetime('now')
+                  AND next_retry_at <= CURRENT_TIMESTAMP
                 ORDER BY id ASC
                 LIMIT ?
                 """,
@@ -706,7 +715,7 @@ class DBUpdater:
                     SELECT id
                     FROM outer_event_outbox
                     WHERE status IN ('pending', 'retrying')
-                      AND datetime(next_retry_at) <= datetime('now')
+                      AND next_retry_at <= CURRENT_TIMESTAMP
                     ORDER BY id ASC
                     LIMIT ?
                 )
@@ -751,7 +760,7 @@ class DBUpdater:
                     next_retry_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE status = 'processing'
-                  AND datetime(updated_at) <= datetime('now', '-' || ? || ' seconds')
+                  AND updated_at <= datetime('now', '-' || ? || ' seconds')
                 """,
                 (timeout,),
             )

@@ -38,6 +38,8 @@ def generate_schemas() -> None:
         filepath = os.path.join(definitions_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(schema_dict, f, ensure_ascii=False, indent=2)
+            # 生成物保持文本文件惯例，避免 schema 重生成时反复出现文件尾换行差异。
+            f.write("\n")
         print(f"Generated schema: {filepath}")
 
 

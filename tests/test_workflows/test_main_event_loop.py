@@ -495,7 +495,10 @@ def test_main_event_loop_uses_workflow_outer_bridge_by_default(tmp_path):
     assert isinstance(loop.outer_bridge, WorkflowOuterLoopBridge)
     result = asyncio.run(loop.run("观察周围"))
     assert result["outer_emit_result"]["status"] == "ok"
-    assert result["outer_emit_result"]["detail"]["mode"] == "sync"
+    assert result["outer_emit_result"]["detail"]["mode"] == "outbox"
+    pending = loop.db_updater.list_pending_outer_events(limit=10)
+    event_names = {str(item["event_name"]) for item in pending}
+    assert event_names == {"state_changed", "turn_ended", "world_evolution"}
 
 
 def test_main_event_loop_success_path_updates_state(tmp_path):
@@ -719,14 +722,14 @@ def test_main_event_loop_emits_minimal_outer_events(tmp_path):
     result = asyncio.run(loop.run("观察周围"))
 
     assert result["is_valid"] is True
-    assert len(outer.state_events) == 1
-    assert len(outer.turn_events) == 1
-    assert len(outer.world_events) == 1
-    assert outer.state_events[0].entity_id == "player_01"
-    assert outer.turn_events[0].turn_id == 1
-    assert outer.world_events[0].time_passed_minutes == loop.outer_world_minutes_per_turn
+    assert len(outer.state_events) == 0
+    assert len(outer.turn_events) == 0
+    assert len(outer.world_events) == 0
+    pending = loop.db_updater.list_pending_outer_events(limit=10)
+    event_names = {str(item["event_name"]) for item in pending}
+    assert event_names == {"state_changed", "turn_ended", "world_evolution"}
     assert result["outer_emit_result"]["status"] == "ok"
-    assert result["outer_emit_result"]["detail"]["mode"] == "sync"
+    assert result["outer_emit_result"]["detail"]["mode"] == "outbox"
 
 
 def test_main_event_loop_outer_failure_does_not_break_turn(tmp_path):
@@ -742,8 +745,8 @@ def test_main_event_loop_outer_failure_does_not_break_turn(tmp_path):
 
     assert result["is_valid"] is True
     assert result["final_response"]
-    assert result["outer_emit_result"]["status"] == "failed"
-    assert result["outer_emit_result"]["detail"]["mode"] == "sync"
+    assert result["outer_emit_result"]["status"] == "ok"
+    assert result["outer_emit_result"]["detail"]["mode"] == "outbox"
 
 
 def test_main_event_loop_partial_outer_failure_does_not_block_following_events(tmp_path):
@@ -759,16 +762,16 @@ def test_main_event_loop_partial_outer_failure_does_not_block_following_events(t
     result = asyncio.run(loop.run("观察周围"))
 
     assert result["is_valid"] is True
-    assert len(outer.turn_events) == 1
-    assert len(outer.world_events) == 1
+    assert len(outer.turn_events) == 0
+    assert len(outer.world_events) == 0
     pending = loop.db_updater.list_pending_outer_events(limit=10)
-    assert pending
-    assert pending[0]["event_name"] == "state_changed"
+    event_names = {str(item["event_name"]) for item in pending}
+    assert event_names == {"state_changed", "turn_ended", "world_evolution"}
 
 
 def test_main_event_loop_overflow_outbox_only_enqueues_supported_event_types(tmp_path):
     """
-    功能：验证 A1 同步外环投递策略下，不再走后台任务溢出分支，也不会写入 outbox 补偿事件。
+    功能：验证默认外环入队策略只写入支持的 outbox 事件类型，不残留旧 turn_batch。
     入参：tmp_path（pytest fixture）：临时目录。
     出参：None。
     异常：断言失败表示仍残留旧的后台溢出行为。
@@ -783,7 +786,7 @@ def test_main_event_loop_overflow_outbox_only_enqueues_supported_event_types(tmp
         rows = conn.execute("SELECT event_name FROM outer_event_outbox").fetchall()
     event_names = {str(row[0]) for row in rows}
     assert "turn_batch" not in event_names
-    assert event_names == set()
+    assert event_names == {"state_changed", "turn_ended", "world_evolution"}
 
 
 def test_main_event_loop_populates_world_snapshot_from_rag_bridge(tmp_path):

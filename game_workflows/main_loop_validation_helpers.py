@@ -188,6 +188,7 @@ def _validate_action_type(action_type: Any) -> list[str]:
         "rest",
         "inspect",
         "use_item",
+        "skill",
         "interact",
         "commit_sandbox",
         "discard_sandbox",

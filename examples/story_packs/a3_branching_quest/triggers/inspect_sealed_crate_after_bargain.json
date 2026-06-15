@@ -1,0 +1,21 @@
+{
+  "trigger_id": "inspect_sealed_crate_after_bargain",
+  "type": "inspect",
+  "label": "暗线路线封存",
+  "description": "玩家复查旧码头盐箱，把线人账口和封蜡编号并入证据链。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "smuggler_quay",
+    "interaction_id": "inspect_sealed_crate_after_bargain",
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "active",
+    "target_stage_id": "seal_the_evidence",
+    "a3_branch_group": "salt_deal_approach",
+    "branch_value": "strike_quay_bargain",
+    "flag": "quay_route_evidence_sealed",
+    "narrative_text": "席舟留下的账口与盐箱残蜡吻合，暗线路线的后果被写成一条可追踪证据链。",
+    "memory_text": "暗线交易路线完成封存，线人账口和盐箱封蜡进入证据链。"
+  },
+  "once": true,
+  "priority": 100
+}

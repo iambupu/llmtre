@@ -1,0 +1,36 @@
+{
+  "scene_id": "market_square",
+  "display_name": "白盐夜市",
+  "summary": "雨棚下的盐袋堆成矮墙，守备告示被潮气卷起一角，摊贩们故意避开码头方向的灯火。",
+  "exits": [
+    {
+      "target_scene_id": "watch_house",
+      "label": "去守备所",
+      "aliases": ["守备所", "北", "找守备"]
+    },
+    {
+      "target_scene_id": "smuggler_quay",
+      "label": "去旧码头",
+      "aliases": ["码头", "南", "旧码头"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_market_notice",
+      "label": "查看潮湿告示",
+      "kind": "inspect",
+      "target_ref": "salt_notice",
+      "aliases": ["告示", "潮湿告示", "守备告示"]
+    }
+  ],
+  "visible_npcs": [],
+  "visible_items": [
+    {
+      "id": "salt_notice",
+      "label": "潮湿告示",
+      "description": "告示上写着官盐封仓，落款却比真实日期晚了一天。",
+      "aliases": ["告示", "守备告示"]
+    }
+  ],
+  "triggers": ["inspect_market_notice"]
+}

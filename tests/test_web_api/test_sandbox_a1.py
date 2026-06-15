@@ -28,15 +28,17 @@ class _FakeDBUpdater:
     异常：无显式异常；调用方可直接修改 has_shadow 模拟状态切换。
     """
 
-    def __init__(self, has_shadow: bool = True) -> None:
+    def __init__(self, has_shadow: bool = True, db_path: str = "") -> None:
         """
         功能：初始化 Shadow 状态开关。
-        入参：has_shadow（bool，默认 True）：Shadow 快照是否存在。
+        入参：has_shadow（bool，默认 True）：Shadow 快照是否存在；
+            db_path（str，默认空）：供 A3 sandbox diff 读取的 SQLite 路径。
         出参：None。
         异常：无。
         """
         self.has_shadow = has_shadow
         self.owner_session_id: str | None = "sess_a1demo01"
+        self.db_path = db_path
 
     def has_shadow_state(self) -> bool:
         """
@@ -91,7 +93,7 @@ class _FakeRuntimeContext(ApiRuntimeContext):
         异常：底层文件系统或 sqlite 初始化失败时向上抛出。
         """
         super().__init__()
-        self.shadow_probe = _FakeDBUpdater(has_shadow=True)
+        self.shadow_probe = _FakeDBUpdater(has_shadow=True, db_path=db_path)
         self.main_loop = _FakeMainLoop(db_updater=self.shadow_probe)
         self.session_store = WebSessionStore(db_path)
         self._locks: dict[str, threading.Lock] = {}
@@ -118,6 +120,68 @@ def _init_runtime_db(db_path: str) -> None:
     with sqlite3.connect(db_path) as connection:
         cursor = connection.cursor()
         ensure_runtime_tables(cursor)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entities_active (
+                entity_id TEXT PRIMARY KEY,
+                hp INTEGER,
+                max_hp INTEGER,
+                mp INTEGER,
+                max_mp INTEGER,
+                current_location_id TEXT,
+                state_flags_json TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entities_shadow (
+                entity_id TEXT PRIMARY KEY,
+                hp INTEGER,
+                max_hp INTEGER,
+                mp INTEGER,
+                max_mp INTEGER,
+                current_location_id TEXT,
+                state_flags_json TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inventory_active (
+                owner_id TEXT,
+                item_id TEXT,
+                quantity INTEGER,
+                UNIQUE(owner_id, item_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inventory_shadow (
+                owner_id TEXT,
+                item_id TEXT,
+                quantity INTEGER,
+                UNIQUE(owner_id, item_id)
+            )
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO entities_active
+            VALUES('player_01', 10, 10, 5, 5, 'town', '[]')
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO entities_shadow
+            VALUES('player_01', 7, 10, 4, 5, 'dock', '["wet"]')
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO inventory_active(owner_id, item_id, quantity)
+            VALUES('player_01', 'coin', 2)
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO inventory_shadow(owner_id, item_id, quantity)
+            VALUES('player_01', 'coin', 5)
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO world_state_active(key, value_json)
+            VALUES('weather', '{"state":"clear"}')
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO world_state_shadow(key, value_json)
+            VALUES('weather', '{"state":"rain"}')
+        """)
         connection.commit()
 
 
@@ -222,7 +286,11 @@ def test_sandbox_commit_idempotent_replay_hits_cache(sandbox_client) -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     assert first_body["session_turn_id"] == 1
+    assert first_body["sandbox_diff"]["mode"] == "committed"
+    assert first_body["sandbox_diff"]["has_changes"] is True
+    assert first_body["sandbox_diff"]["character_changes"]
     assert second_body["session_turn_id"] == 1
+    assert second_body["sandbox_diff"] == first_body["sandbox_diff"]
     assert sandbox_client.call_count["run_turn"] == 1
     context = sandbox_client.application.extensions["tre_api_context"]  # type: ignore[attr-defined]
     memory_path = Path(str(context.agent_context_dir)) / "sessions" / "sess_a1demo01" / "MEMORY.md"
@@ -284,8 +352,30 @@ def test_sandbox_discard_idempotent_replay_hits_cache(sandbox_client) -> None:
     assert second.status_code == 200
     assert first_body["discarded"] is True
     assert second_body["discarded"] is True
+    assert first_body["sandbox_diff"]["mode"] == "discarded"
+    assert first_body["sandbox_diff"]["inventory_changes"]
     assert first_body["session_turn_id"] == second_body["session_turn_id"] == 1
     assert sandbox_client.call_count["run_turn"] == 1
+
+
+def test_sandbox_diff_preview_returns_grouped_changes(sandbox_client) -> None:
+    """
+    功能：验证 sandbox diff 预览不推进回合，并返回 Active/Shadow 分组差异。
+    入参：sandbox_client（fixture）：最小 Flask 客户端。
+    出参：None。
+    异常：断言失败表示 A3 diff 预览接口回归。
+    """
+    response = sandbox_client.get("/api/sessions/sess_a1demo01/sandbox/diff")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    diff = body["sandbox_diff"]
+    assert diff["mode"] == "preview"
+    assert diff["has_changes"] is True
+    assert diff["character_changes"]
+    assert diff["inventory_changes"]
+    assert diff["world_changes"]
+    assert sandbox_client.call_count["run_turn"] == 0
 
 
 def test_sandbox_commit_rejects_invalid_session_id(sandbox_client) -> None:

@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from state.contracts.branch import BranchConsequenceSummary
 from state.contracts.quest import QuestRuntimeState
 from state.contracts.scene import SceneAffordance, SceneSnapshotV2
 from state.contracts.trigger import TriggerEvent
@@ -121,6 +122,8 @@ class TurnResult(BaseModel):
     trace: TurnTrace | None = None
     trigger_events: list[TriggerEvent] = Field(default_factory=list)
     quest_updates: list[QuestRuntimeState] = Field(default_factory=list)
+    quest_states: list[QuestRuntimeState] = Field(default_factory=list)
+    branch_consequences: list[BranchConsequenceSummary] = Field(default_factory=list)
     pack_runtime_errors: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")

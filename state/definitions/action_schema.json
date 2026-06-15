@@ -27,6 +27,7 @@
       "type": "object"
     },
     "ActionType": {
+      "description": "功能：定义主循环可识别的行动类型枚举。\n入参：无；枚举成员在类定义中声明。\n出参：ActionType 枚举值，用于约束移动、交谈、攻击、使用物品等动作。\n异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。",
       "enum": [
         "attack",
         "use_item",
@@ -39,6 +40,7 @@
       "type": "string"
     },
     "EffectType": {
+      "description": "功能：定义动作效果的类型枚举。\n入参：无；枚举成员在类定义中声明。\n出参：EffectType 枚举值，用于描述伤害、治疗、状态变化和任务推进等效果。\n异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。",
       "enum": [
         "stat_change",
         "resource_change",

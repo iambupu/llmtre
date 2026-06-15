@@ -612,6 +612,27 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/sessions/{session_id}/sandbox/diff:
+    get:
+      tags: [Sandbox]
+      summary: 预览沙盒差异
+      operationId: previewSandboxDiff
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      responses:
+        "200":
+          description: 预览成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxDiffResponse"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/TurnConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/sessions/{session_id}/sandbox/discard:
     post:
       tags: [Sandbox]
@@ -1589,6 +1610,18 @@ components:
           items:
             type: object
             additionalProperties: true
+        quest_states:
+          type: array
+          description: A3 起返回的完整任务运行态快照；用于恢复当前任务状态，不能替代后端规则结算。
+          items:
+            type: object
+            additionalProperties: true
+        branch_consequences:
+          type: array
+          description: A3 分支后果摘要；由后端从 trigger、quest、physics_diff 和 memory 证据生成。
+          items:
+            type: object
+            additionalProperties: true
         pack_runtime_errors:
           type: array
           description: A2-Plus 剧本包触发器或任务运行期错误诊断；不由前端执行规则。
@@ -1760,6 +1793,63 @@ components:
           $ref: "#/components/schemas/SessionTurnId"
         runtime_turn_id:
           $ref: "#/components/schemas/RuntimeTurnId"
+        sandbox_diff:
+          $ref: "#/components/schemas/SandboxDiffSummary"
+    SandboxDiffResponse:
+      type: object
+      required: [ok, trace_id, session_id, sandbox_diff]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        trace_id:
+          type: string
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        sandbox_diff:
+          $ref: "#/components/schemas/SandboxDiffSummary"
+    SandboxDiffSummary:
+      type: object
+      required: [session_id, trace_id, mode, has_changes]
+      properties:
+        session_id:
+          $ref: "#/components/schemas/SessionId"
+        trace_id:
+          type: string
+        mode:
+          type: string
+          enum: [preview, committed, discarded]
+        has_changes:
+          type: boolean
+        character_changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        inventory_changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        task_changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        world_changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        memory_changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        diagnostics:
+          type: array
+          items:
+            type: string
     SandboxDiscardResponse:
       type: object
       required: [ok, trace_id, session_id, discarded, session_turn_id, runtime_turn_id]
@@ -1778,6 +1868,8 @@ components:
           $ref: "#/components/schemas/SessionTurnId"
         runtime_turn_id:
           $ref: "#/components/schemas/RuntimeTurnId"
+        sandbox_diff:
+          $ref: "#/components/schemas/SandboxDiffSummary"
 
     ResetSessionRequest:
       allOf:

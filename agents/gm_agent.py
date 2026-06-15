@@ -1136,6 +1136,7 @@ class GMAgent:
             "rest": self._render_rest_template,
             "inspect": self._render_inspect_template,
             "use_item": self._render_use_item_template,
+            "skill": self._render_skill_template,
             "interact": self._render_interact_template,
             "commit_sandbox": self._render_commit_sandbox_template,
             "discard_sandbox": self._render_discard_sandbox_template,
@@ -1409,6 +1410,38 @@ class GMAgent:
             item_id=item_id,
             hp_delta=hp_delta,
         )
+
+    def _render_skill_template(
+        self,
+        actor_name: str,
+        action: dict[str, Any],
+        physics_diff: dict[str, Any],
+        state: dict[str, Any],
+    ) -> str:
+        """
+        功能：渲染技能动作模板，并把确定性 MP 消耗和状态标记反馈给玩家。
+        入参：actor_name/action/physics_diff/state，均来自主循环确定性状态快照。
+        出参：str，玩家可读的技能反馈。
+        异常：模板格式化异常向上抛出；技能 ID 缺失时降级为 focus。
+        """
+        del state
+        parameters = self._as_mapping(action.get("parameters"))
+        skill_id = str(parameters.get("skill_id") or "focus")
+        mp_delta = self._to_int(physics_diff.get("mp_delta", 0))
+        mp_cost = abs(min(0, mp_delta))
+        template = str(
+            self.templates.get(
+                "skill",
+                "{actor_name}发动了 {skill_id}，消耗了 {mp_cost} 点法力。",
+            )
+        )
+        base = template.format(
+            actor_name=actor_name,
+            skill_id=skill_id,
+            mp_cost=mp_cost,
+            mp_delta=mp_delta,
+        )
+        return f"{base}{self._effect_sentence(physics_diff)}"
 
     def _render_interact_template(
         self,

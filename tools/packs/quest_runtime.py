@@ -4,9 +4,9 @@ A2-Plus 剧本包任务运行态状态机。
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from state.contracts.quest import QuestDef, QuestRuntimeState, QuestStatus
 
@@ -156,12 +156,15 @@ def apply_trigger_update(
     *,
     next_status: str,
     next_stage_id: str,
+    data_patch: Mapping[str, Any] | None = None,
     timestamp: str | None = None,
 ) -> QuestRuntimeState:
     """
     功能：根据触发器 update_quest effect 的目标字段更新任务运行态。
     入参：state（QuestRuntimeState）：当前任务状态；next_status（str）：目标状态，可为空；
-        next_stage_id（str）：目标阶段，可为空；timestamp（str | None，默认 None）：可注入时间。
+        next_stage_id（str）：目标阶段，可为空；data_patch（Mapping[str, Any] | None，默认 None）：
+        由触发器效果显式写入的任务运行态扩展数据，当前用于 A3 分支路线与后果引用；
+        timestamp（str | None，默认 None）：可注入时间。
     出参：QuestRuntimeState，按触发器语义更新后的任务状态。
     异常：next_status 不在 VALID_QUEST_STATUSES 时抛出 ValueError；Pydantic 构造异常向上抛出。
     """
@@ -179,6 +182,8 @@ def apply_trigger_update(
         _append_unique(completed, state.current_stage_id)
         data["stages_completed"] = completed
         data.setdefault("completed_at", resolved_time)
+    if data_patch:
+        _apply_data_patch(data, data_patch)
     return QuestRuntimeState(
         quest_id=state.quest_id,
         status=cast(QuestStatus, resolved_status),
@@ -210,3 +215,49 @@ def _append_unique(target: list[str], value: str) -> None:
     """
     if value and value not in target:
         target.append(value)
+
+
+def _apply_data_patch(data: dict[str, Any], data_patch: Mapping[str, Any]) -> None:
+    """
+    功能：把触发器声明的运行态扩展数据合并进 QuestRuntimeState.data。
+    入参：data（dict[str, Any]）：本次迁移的可变 data 副本；data_patch（Mapping[str, Any]）：
+        触发器效果层组装的扩展字段。
+    出参：None，原地修改 data。
+    异常：不抛业务异常；非法结构会被忽略，避免坏触发器污染任务运行态。
+    """
+    branch_path = data_patch.get("branch_path")
+    if isinstance(branch_path, str) and branch_path.strip():
+        data["branch_path"] = branch_path.strip()
+
+    branch_choice = data_patch.get("branch_choice")
+    if isinstance(branch_choice, Mapping):
+        normalized_choice = _normalize_string_mapping(branch_choice)
+        if normalized_choice:
+            choices = data.get("branch_choices")
+            if not isinstance(choices, list):
+                choices = []
+            if normalized_choice not in choices:
+                choices.append(normalized_choice)
+            data["branch_choices"] = choices
+
+    consequence_ref = data_patch.get("consequence_ref")
+    if isinstance(consequence_ref, str) and consequence_ref.strip():
+        refs = data.get("consequence_refs")
+        if not isinstance(refs, list):
+            refs = []
+        _append_unique(refs, consequence_ref.strip())
+        data["consequence_refs"] = refs
+
+
+def _normalize_string_mapping(raw: Mapping[str, Any]) -> dict[str, str]:
+    """
+    功能：把分支选择记录规整为只含非空字符串值的稳定字典，便于幂等去重。
+    入参：raw（Mapping[str, Any]）：触发器效果层传入的分支选择记录。
+    出参：dict[str, str]，非法或空值被过滤。
+    异常：不抛异常。
+    """
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        if isinstance(key, str) and isinstance(value, str) and value.strip():
+            normalized[key] = value.strip()
+    return normalized

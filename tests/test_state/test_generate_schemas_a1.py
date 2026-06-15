@@ -39,8 +39,10 @@ def test_generate_schemas_writes_all_definition_files(
         "npc_schema.json",
         "quest_schema.json",
     ]
-    item_schema = json.loads((definitions_dir / "item_schema.json").read_text(encoding="utf-8"))
+    item_schema_text = (definitions_dir / "item_schema.json").read_text(encoding="utf-8")
+    item_schema = json.loads(item_schema_text)
     assert item_schema["title"] == "ItemTemplate"
+    assert item_schema_text.endswith("\n")
     assert "Generated schema:" in capsys.readouterr().out
 
 

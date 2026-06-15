@@ -1,6 +1,7 @@
 {
   "$defs": {
     "EvaluatorType": {
+      "description": "功能：定义任务阶段评价器的来源类型。\n入参：无；枚举成员在类定义中声明。\n出参：EvaluatorType 枚举值，用于区分规则评价与脚本评价路径。\n异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。",
       "enum": [
         "deterministic",
         "llm_prompt",

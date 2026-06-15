@@ -1,0 +1,36 @@
+{
+  "scene_id": "archive_hall",
+  "display_name": "封契库",
+  "summary": "封契库里只点着一盏低灯，柜格按年份编号，缺失的盐契位置露出一道新鲜木茬。",
+  "exits": [
+    {
+      "target_scene_id": "watch_house",
+      "label": "回守备所案房",
+      "aliases": ["守备所", "案房", "返回"]
+    },
+    {
+      "target_scene_id": "smuggler_quay",
+      "label": "回旧码头",
+      "aliases": ["码头", "旧码头", "返回码头"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_archive_seal",
+      "label": "比对封契缺口",
+      "kind": "inspect",
+      "target_ref": "salt_contract_shelf",
+      "aliases": ["封契", "缺口", "柜格"]
+    }
+  ],
+  "visible_npcs": [],
+  "visible_items": [
+    {
+      "id": "salt_contract_shelf",
+      "label": "盐契柜格",
+      "description": "缺口边缘留下新鲜木屑，能与码头盐箱上的封蜡编号对应。",
+      "aliases": ["柜格", "封契", "盐契"]
+    }
+  ],
+  "triggers": ["inspect_archive_seal"]
+}

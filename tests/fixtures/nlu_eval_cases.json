@@ -37,6 +37,12 @@
     "expected_clarification": false
   },
   {
+    "name": "use_focus_skill_prioritizes_skill",
+    "input": "使用专注技能",
+    "expected_type": "skill",
+    "expected_clarification": false
+  },
+  {
     "name": "search_area_as_inspect",
     "input": "搜索周围的痕迹",
     "expected_type": "inspect",
