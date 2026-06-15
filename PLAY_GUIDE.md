@@ -1,4 +1,4 @@
-# TRE A2-Release 游玩指南
+# TRE A2-Release / A3 分支任务游玩指南
 
 本指南面向想直接试玩当前 Web Demo 的玩家。按本文顺序操作，可以完成剧本包选择、剧本导入、会话创建、回合输入、场景查看、记忆查看和重启后继续游玩。当前推荐使用 `/app`（React 前端），`/play` 作为 legacy 对照入口保留。
 
@@ -356,6 +356,20 @@ npm run build
 npm run playtest:red-lantern
 npm run playtest:a2-release-import
 ```
+
+A3 分支任务验收，在仓库根目录执行：
+
+```bash
+uv run python -m tools.packs.validate examples/story_packs/a3_branching_quest
+uv run python -m tools.packs.verify_a3 examples/story_packs/a3_branching_quest
+uv run python -m tools.logs.check_runtime_logs --since-minutes 30
+
+cd frontend
+npm run playtest:a3-branching
+npm run playtest:long-playability
+```
+
+A3 验收重点不是前端自行推断任务推进，而是确认 `/app` 能展示后端返回的 `quest_states`、分支后果和沙盒差异摘要；普通 JSON 回合与 SSE 回合也必须保留同一组结构化事实。
 
 Windows 下 pytest 清理临时目录或 Vitest 启动 esbuild 时可能出现权限噪声；若断言未失败，可换用仓库内 `--basetemp test_runs/<name>` 或非沙箱环境重跑同一命令。
 

@@ -2,6 +2,34 @@
 
 本文件记录 TRE / llmtre 的用户可见变化、发布门禁和重要兼容说明。
 
+## [0.1.0-a3-branching] - 2026-06-15
+
+### Added
+
+- 新增 A3 外部示例包 `examples/story_packs/a3_branching_quest/`，覆盖双路线任务、分支汇合、场景跳转、物品与任务状态联动。
+- 新增 A3 剧本校验入口 `python -m tools.packs.verify_a3 examples/story_packs/a3_branching_quest`，用于校验分支组、路线完成、汇合场景和编译摘要。
+- 新增 `quest_states` 运行时持久化、`BranchConsequenceSummary` 分支后果摘要和 `SandboxDiffSummary` 沙盒差异摘要。
+- 新增前端 A3 试玩脚本：`npm run playtest:a3-branching` 与 `npm run playtest:long-playability`。
+
+### Changed
+
+- 普通 JSON 回合与 SSE 回合保持 A3 任务状态、分支后果和沙盒差异字段等价。
+- `/app` 现在展示后端返回的任务、分支后果与沙盒差异事实，不在前端推断规则结算。
+- NLU 与动作处理补齐 A3 示例包所需的技能检查、确定性物品消耗和长回合可玩性路径。
+
+### Verification
+
+- 后端质量门禁：`python -m ruff check .`、`python -m black --check .`、`python -m mypy .`、`python -m pytest tests -q`，结果为 519 passed、40 warnings。
+- 前端质量门禁：`npm run lint`、`npm run typecheck`、`npm test`、`npm run build`，Vitest 结果为 28 passed。
+- 剧本门禁：`python -m tools.packs.validate examples/story_packs/a3_branching_quest` 通过，编译摘要 hash 为 `02345fad72666add`；`python -m tools.packs.verify_a3 examples/story_packs/a3_branching_quest` 通过，分支组为 `salt_deal_approach`。
+- 浏览器试玩：`npm run playtest:a3-branching` 覆盖 `report_to_watch` 与 `strike_quay_bargain` 双路线；`npm run playtest:long-playability` 覆盖 13 次 SSE 回合与 1 次普通 JSON 回合。
+- 日志验收：`python -m tools.logs.check_runtime_logs --since-minutes 30` 通过，`git diff --check` 仅有历史 CRLF 提示。
+
+### Known Notes
+
+- A3 示例包位于 `examples/story_packs/a3_branching_quest/`，不是默认内置包；需要导入或复制到可注册目录后才会作为玩家可选包出现。
+- A3 分支后果和沙盒差异摘要是后端权威字段；前端只做展示与请求编排。
+
 ## [0.1.0-a2-release] - 2026-06-12
 
 ### Added
