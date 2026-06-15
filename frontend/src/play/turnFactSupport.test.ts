@@ -33,4 +33,23 @@ describe("play/turnFactSupport", () => {
     expect(facts).toContain("结果：行动成立");
     expect(facts.join(" ")).not.toContain("valid_action");
   });
+
+  it("最近回合事实展示后端分支后果摘要", () => {
+    /**
+     * 功能：验证选择后果展示来自 branch_consequences 结构化字段。
+     * 入参：无。
+     * 出参：None；通过断言表达结果。
+     * 异常：断言失败表示前端仍未展示 A3 分支后果。
+     */
+    const facts = resolveTurnFacts({
+      branch_consequences: [
+        {
+          branch_path: "report_to_watch",
+          state_changes: [{ kind: "quest_stage" }, { kind: "state_flag" }],
+        },
+      ],
+    } as TurnResult);
+
+    expect(facts).toContain("选择后果：report_to_watch（2 项）");
+  });
 });

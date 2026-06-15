@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveInventoryItemDescription,
   resolveInventoryItemName,
-} from "@/play/InventoryPanel";
+} from "@/play/inventoryPanelSupport";
 
 describe("play/InventoryPanel", () => {
   it("会把赤灯剧本物品 ID 转成玩家可读名称", () => {

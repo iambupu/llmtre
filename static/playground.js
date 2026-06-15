@@ -12,6 +12,7 @@ const state = {
     outputMode: localStorage.getItem("tre.outputMode") || "stream",
     streamingGmText: "",
     streamingGmIndex: null,
+    streamingGmRenderTimer: null,
     lastNonEmptyTrace: [],
     isBusy: false,
 };
@@ -590,6 +591,27 @@ function updateConversationText(index, text) {
         return;
     }
     state.conversation[index].text = text;
+    // 流式边界：gm_delta 可能是 token 级事件，短延迟批量刷新避免 legacy 页面反复重绘。
+    if (state.streamingGmRenderTimer !== null) {
+        return;
+    }
+    state.streamingGmRenderTimer = window.setTimeout(() => {
+        state.streamingGmRenderTimer = null;
+        renderConversation();
+    }, 50);
+}
+
+/**
+ * 功能：立即刷新被节流的流式对话渲染，确保 done/error 前页面文本与状态一致。
+ * 入参：无。
+ * 出参：void。
+ * 异常：DOM 缺失时由 renderConversation 静默降级。
+ */
+function flushConversationRender() {
+    if (state.streamingGmRenderTimer !== null) {
+        window.clearTimeout(state.streamingGmRenderTimer);
+        state.streamingGmRenderTimer = null;
+    }
     renderConversation();
 }
 
@@ -868,6 +890,7 @@ function handleStreamEvent(name, payload, userInput) {
         return;
     }
     if (name === "error") {
+        flushConversationRender();
         state.streamingGmText = "";
         state.streamingGmIndex = null;
         renderPlayerFacingError(payload.message || "流式回合失败", payload);
@@ -890,6 +913,7 @@ function handleStreamEvent(name, payload, userInput) {
                 state.streamingGmIndex,
                 payload.final_response || state.streamingGmText || "回合已处理。",
             );
+            flushConversationRender();
         }
         state.streamingGmText = "";
         state.streamingGmIndex = null;

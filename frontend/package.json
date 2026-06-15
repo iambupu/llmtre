@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "playtest:red-lantern": "node scripts/redLanternUiPlaytest.mjs",
-    "playtest:a2-release-import": "node scripts/a2ReleaseImportPlaytest.mjs"
+    "playtest:a2-release-import": "node scripts/a2ReleaseImportPlaytest.mjs",
+    "playtest:a3-branching": "node scripts/a3BranchingQuestPlaytest.mjs",
+    "playtest:long-playability": "node scripts/longPlayabilityPlaytest.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.7",

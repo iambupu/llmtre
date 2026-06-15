@@ -3,6 +3,7 @@
   EyeOffIcon,
   RotateCcwIcon,
   ShieldIcon,
+  GitCompareIcon,
   SwordsIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ import { rewriteActionLabelForDisplay } from "@/play/sceneSupport";
 /**
  * 功能：渲染会话记忆摘要，并把摘要里的系统 ID 转为玩家可读显示文本。
  * 入参：memoryText（string）：后端记忆摘要；sceneDisplayResolver（SceneDisplayLabelResolver）：显示名映射；
- *   disabled（boolean）：会话按钮禁用状态；onRead/onRefresh/onCommit/onDiscard：记忆操作回调。
+ *   disabled（boolean）：会话按钮禁用状态；onRead/onRefresh/onPreviewDiff/onCommit/onDiscard：记忆操作回调。
  * 出参：JSX.Element，包含摘要文本和读取、刷新、清空、并入、回滚按钮。
  * 异常：不抛异常；没有摘要时展示空态文案，按钮禁用逻辑由入参控制。
  */
@@ -23,6 +24,7 @@ export function MemoryPanel({
   disabled,
   onRead,
   onRefresh,
+  onPreviewDiff,
   onCommit,
   onDiscard,
 }: {
@@ -31,6 +33,7 @@ export function MemoryPanel({
   disabled: boolean;
   onRead: () => void;
   onRefresh: () => void;
+  onPreviewDiff: () => void;
   onCommit: () => void;
   onDiscard: () => void;
 }) {
@@ -62,7 +65,11 @@ export function MemoryPanel({
             清空
           </Button>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
+          <Button variant="outline" disabled={disabled} onClick={onPreviewDiff}>
+            <GitCompareIcon data-icon="inline-start" />
+            差异
+          </Button>
           <Button variant="outline" disabled={disabled} onClick={onCommit}>
             <ShieldIcon data-icon="inline-start" />
             并入

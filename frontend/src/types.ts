@@ -292,6 +292,8 @@ export type TurnResult = {
   errors?: string[];
   trigger_events?: unknown[];
   quest_updates?: unknown[];
+  quest_states?: unknown[];
+  branch_consequences?: unknown[];
   pack_runtime_errors?: unknown[];
   pack_quests?: unknown[];
   pack_triggers?: unknown[];

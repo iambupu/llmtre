@@ -64,11 +64,128 @@ type PlayContentProps = {
   onDeletePack: () => void;
   onReadMemory: () => void;
   onRefreshMemory: () => void;
+  onPreviewSandboxDiff: () => void;
   onCommitMemory: () => void;
   onDiscardMemory: () => void;
   debugPanelData: DebugPanelData;
   onToggleDebug: () => void;
 };
+
+type SidebarPanelsProps = Pick<
+  PlayContentProps,
+  | "sessionCharacterId"
+  | "characterId"
+  | "activeCharacter"
+  | "metrics"
+  | "sessionTurn"
+  | "sandboxMode"
+  | "hasSession"
+  | "inventory"
+  | "quests"
+  | "storyPacks"
+  | "storyPackDiagnostics"
+  | "selectedPack"
+  | "packPreview"
+  | "packImportDraft"
+  | "sessionId"
+  | "displayedMemory"
+  | "packPanelDisabled"
+  | "storyPacksLoading"
+  | "packPreviewLoading"
+  | "packImporting"
+  | "packDeleting"
+  | "sceneDisplayResolver"
+  | "onPreviewPack"
+  | "onImportDraftChange"
+  | "onImportPack"
+  | "onDeletePack"
+  | "onReadMemory"
+  | "onRefreshMemory"
+  | "onPreviewSandboxDiff"
+  | "onCommitMemory"
+  | "onDiscardMemory"
+>;
+
+/**
+ * 功能：渲染玩家侧栏信息面板，保持 PlayContent 主布局只负责三栏结构。
+ * 入参：SidebarPanelsProps，包含角色、背包、任务、剧本包和记忆操作。
+ * 出参：JSX.Element。
+ * 异常：不抛异常；各子面板自行处理空态。
+ */
+function SidebarPanels({
+  sessionCharacterId,
+  characterId,
+  activeCharacter,
+  metrics,
+  sessionTurn,
+  sandboxMode,
+  hasSession,
+  inventory,
+  quests,
+  storyPacks,
+  storyPackDiagnostics,
+  selectedPack,
+  packPreview,
+  packImportDraft,
+  sessionId,
+  displayedMemory,
+  packPanelDisabled,
+  storyPacksLoading,
+  packPreviewLoading,
+  packImporting,
+  packDeleting,
+  sceneDisplayResolver,
+  onPreviewPack,
+  onImportDraftChange,
+  onImportPack,
+  onDeletePack,
+  onReadMemory,
+  onRefreshMemory,
+  onPreviewSandboxDiff,
+  onCommitMemory,
+  onDiscardMemory,
+}: SidebarPanelsProps) {
+  return (
+    <aside className="order-2 flex min-w-0 flex-col gap-4 xl:order-none">
+      <StatusPanel
+        characterId={sessionCharacterId || characterId}
+        activeCharacter={activeCharacter}
+        metrics={metrics}
+        sessionTurn={sessionTurn}
+        sandboxMode={sandboxMode}
+        hasSession={hasSession}
+      />
+      <InventoryPanel inventory={inventory} />
+      <QuestPanel quests={quests} />
+      <PackReleasePanel
+        storyPacks={storyPacks}
+        diagnostics={storyPackDiagnostics}
+        selectedPack={selectedPack}
+        preview={packPreview}
+        importDraft={packImportDraft}
+        disabled={packPanelDisabled}
+        isLoading={storyPacksLoading}
+        isPreviewLoading={packPreviewLoading}
+        isImporting={packImporting}
+        isDeleting={packDeleting}
+        onPreview={onPreviewPack}
+        onImportDraftChange={onImportDraftChange}
+        onImport={onImportPack}
+        onDelete={onDeletePack}
+      />
+      <MemoryPanel
+        memoryText={displayedMemory}
+        sceneDisplayResolver={sceneDisplayResolver}
+        disabled={!sessionId}
+        onRead={onReadMemory}
+        onRefresh={onRefreshMemory}
+        onPreviewDiff={onPreviewSandboxDiff}
+        onCommit={onCommitMemory}
+        onDiscard={onDiscardMemory}
+      />
+    </aside>
+  );
+}
 
 /**
  * 功能：渲染游玩页主体三栏布局，承载场景、聊天、状态侧栏和桌面调试面板；
@@ -120,6 +237,7 @@ export function PlayContent({
   onDeletePack,
   onReadMemory,
   onRefreshMemory,
+  onPreviewSandboxDiff,
   onCommitMemory,
   onDiscardMemory,
   debugPanelData,
@@ -170,43 +288,39 @@ export function PlayContent({
       </section>
 
       {/* 侧栏是玩家续玩判断的核心信息，窄屏下必须先于聊天历史展示。 */}
-      <aside className="order-2 flex min-w-0 flex-col gap-4 xl:order-none">
-        <StatusPanel
-          characterId={sessionCharacterId || characterId}
-          activeCharacter={activeCharacter}
-          metrics={metrics}
-          sessionTurn={sessionTurn}
-          sandboxMode={sandboxMode}
-          hasSession={hasSession}
-        />
-        <InventoryPanel inventory={inventory} />
-        <QuestPanel quests={quests} />
-        <PackReleasePanel
-          storyPacks={storyPacks}
-          diagnostics={storyPackDiagnostics}
-          selectedPack={selectedPack}
-          preview={packPreview}
-          importDraft={packImportDraft}
-          disabled={packPanelDisabled}
-          isLoading={storyPacksLoading}
-          isPreviewLoading={packPreviewLoading}
-          isImporting={packImporting}
-          isDeleting={packDeleting}
-          onPreview={onPreviewPack}
-          onImportDraftChange={onImportDraftChange}
-          onImport={onImportPack}
-          onDelete={onDeletePack}
-        />
-        <MemoryPanel
-          memoryText={displayedMemory}
-          sceneDisplayResolver={sceneDisplayResolver}
-          disabled={!sessionId}
-          onRead={onReadMemory}
-          onRefresh={onRefreshMemory}
-          onCommit={onCommitMemory}
-          onDiscard={onDiscardMemory}
-        />
-      </aside>
+      <SidebarPanels
+        sessionCharacterId={sessionCharacterId}
+        characterId={characterId}
+        activeCharacter={activeCharacter}
+        metrics={metrics}
+        sessionTurn={sessionTurn}
+        sandboxMode={sandboxMode}
+        hasSession={hasSession}
+        inventory={inventory}
+        quests={quests}
+        storyPacks={storyPacks}
+        storyPackDiagnostics={storyPackDiagnostics}
+        selectedPack={selectedPack}
+        packPreview={packPreview}
+        packImportDraft={packImportDraft}
+        sessionId={sessionId}
+        displayedMemory={displayedMemory}
+        packPanelDisabled={packPanelDisabled}
+        storyPacksLoading={storyPacksLoading}
+        packPreviewLoading={packPreviewLoading}
+        packImporting={packImporting}
+        packDeleting={packDeleting}
+        sceneDisplayResolver={sceneDisplayResolver}
+        onPreviewPack={onPreviewPack}
+        onImportDraftChange={onImportDraftChange}
+        onImportPack={onImportPack}
+        onDeletePack={onDeletePack}
+        onReadMemory={onReadMemory}
+        onRefreshMemory={onRefreshMemory}
+        onPreviewSandboxDiff={onPreviewSandboxDiff}
+        onCommitMemory={onCommitMemory}
+        onDiscardMemory={onDiscardMemory}
+      />
 
       {debugVisible ? (
         <aside className="hidden min-w-0 xl:block">
