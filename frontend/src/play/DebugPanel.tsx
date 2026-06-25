@@ -48,6 +48,52 @@ export type DebugPanelProps = {
 export type DebugPanelData = Omit<DebugPanelProps, "compact" | "onCollapse">;
 
 /**
+ * 功能：读取回合的快捷动作布局，供调试状态摘要使用。
+ * 入参：turnData（TurnResult | null）：最近回合。
+ * 出参：TurnResult["quick_action_layout"] | null。
+ * 异常：不抛异常；缺失时返回 null。
+ */
+function readQuickActionLayout(turnData: TurnResult | null): TurnResult["quick_action_layout"] | null {
+  return turnData ? (turnData.quick_action_layout ?? null) : null;
+}
+
+/**
+ * 功能：读取分支后果数组，供调试状态摘要展示。
+ * 入参：turnData（TurnResult | null）：最近回合。
+ * 出参：unknown[]，缺失或非数组时返回空数组。
+ * 异常：不抛异常。
+ */
+function readBranchConsequences(turnData: TurnResult | null): unknown[] {
+  const consequences = turnData ? turnData.branch_consequences : null;
+  return Array.isArray(consequences) ? consequences : [];
+}
+
+/**
+ * 功能：构造状态页签的结构化调试载荷，避免 DebugPanel 主组件累积可选链复杂度。
+ * 入参：turnData（TurnResult | null）：最近回合；activeCharacter（unknown）：当前角色摘要。
+ * 出参：Record<string, unknown>，供 DebugPre 展示。
+ * 异常：不抛异常；缺失字段按空数组或 null 降级。
+ */
+function buildStatusDebugValue(
+  turnData: TurnResult | null,
+  activeCharacter: SessionPayload["active_character"] | TurnResult["active_character"] | null
+) {
+  const quickActionLayout = readQuickActionLayout(turnData);
+  const branchConsequences = readBranchConsequences(turnData);
+  return {
+    character_state_flags: activeCharacter?.state_flags ?? [],
+    character_status_effects: activeCharacter?.status_effects ?? [],
+    character_status_context: activeCharacter?.status_context ?? null,
+    layout_common_count: quickActionLayout?.common_actions?.length ?? 0,
+    layout_object_keys: Object.keys(quickActionLayout?.object_actions ?? {}),
+    layout_unmapped_actions: quickActionLayout?.diagnostics?.unmapped_actions ?? [],
+    layout_fallback_used: quickActionLayout == null,
+    branch_consequences_count: branchConsequences.length,
+    branch_consequences: branchConsequences,
+  };
+}
+
+/**
  * 功能：渲染移动端固定调试入口，桌面端调试面板由 PlayContent 控制。
  * 入参：debugPanelData（DebugPanelData）：调试面板所需状态快照。
  * 出参：JSX.Element。
@@ -163,20 +209,7 @@ export function DebugPanel({
               <DebugStatCard label="Tokens" value={String(tokenCount)} />
             </div>
             <DebugPre
-              value={{
-                character_state_flags: activeCharacter?.state_flags ?? [],
-                character_status_effects: activeCharacter?.status_effects ?? [],
-                character_status_context: activeCharacter?.status_context ?? null,
-                layout_common_count:
-                  turnData?.quick_action_layout?.common_actions?.length ?? 0,
-                layout_object_keys: Object.keys(
-                  turnData?.quick_action_layout?.object_actions ?? {}
-                ),
-                layout_unmapped_actions:
-                  turnData?.quick_action_layout?.diagnostics?.unmapped_actions ?? [],
-                layout_fallback_used:
-                  turnData?.quick_action_layout == null,
-              }}
+              value={buildStatusDebugValue(turnData, activeCharacter)}
             />
             <DebugPre value={{ sessionData, turnData }} />
             <DebugPre value={{ stream_done_quick_actions: turnData?.quick_actions ?? [] }} />

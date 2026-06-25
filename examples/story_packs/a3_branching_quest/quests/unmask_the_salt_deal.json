@@ -1,0 +1,60 @@
+{
+  "quest_id": "unmask_the_salt_deal",
+  "title": "追查私盐契",
+  "description": "从白盐夜市的告示和旧码头的盐箱查起，选择公开交给守备所，或先与码头线人交易，最终把缺失盐契封存为证。",
+  "stages": [
+    {
+      "stage_id": "gather_leads",
+      "label": "搜集盐契线索",
+      "description": "确认守备告示日期异常，并在旧码头找到带官封痕迹的盐箱。",
+      "completion_condition": {
+        "required_triggers": ["inspect_market_notice", "inspect_hidden_crate"]
+      }
+    },
+    {
+      "stage_id": "choose_approach",
+      "label": "决定调查路线",
+      "description": "你已经掌握初步证据，必须决定公开提交守备所，或先向码头线人换取账口。",
+      "completion_condition": {
+        "a3_choice_prompt": "公开交证据还是暗中交易"
+      }
+    },
+    {
+      "stage_id": "report_to_watch",
+      "label": "公开交给守备所",
+      "description": "你把证据交给云校尉，守备所立刻封锁码头，但线人会警觉。",
+      "completion_condition": {
+        "a3_branch_group": "salt_deal_approach",
+        "branch_value": "report_to_watch",
+        "merge_stage_id": "seal_the_evidence"
+      }
+    },
+    {
+      "stage_id": "strike_quay_bargain",
+      "label": "暗中与线人交易",
+      "description": "你暂时不惊动守备，换取私盐账口，但守备所不会第一时间保护现场。",
+      "completion_condition": {
+        "a3_branch_group": "salt_deal_approach",
+        "branch_value": "strike_quay_bargain",
+        "merge_stage_id": "seal_the_evidence"
+      }
+    },
+    {
+      "stage_id": "seal_the_evidence",
+      "label": "封存关键证据",
+      "description": "无论采取哪条路线，你都需要把盐箱封蜡和缺失盐契对应起来。",
+      "completion_condition": {
+        "merge_from_branch_group": "salt_deal_approach"
+      }
+    },
+    {
+      "stage_id": "case_closed",
+      "label": "私盐契结案",
+      "description": "盐契缺口、码头盐箱和路线选择后果被一并记录，案件进入可回顾结案状态。",
+      "completion_condition": {
+        "terminal": true
+      }
+    }
+  ],
+  "start_stage_id": "gather_leads"
+}

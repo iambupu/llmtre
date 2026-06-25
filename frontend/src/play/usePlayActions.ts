@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { commitSandbox, discardSandbox } from "@/api/sandbox";
+import { commitSandbox, discardSandbox, previewSandboxDiff } from "@/api/sandbox";
 import { getMemory, refreshMemory } from "@/api/memory";
 import { resetSession } from "@/api/runtime";
 import { createSession, deleteSession, getSession } from "@/api/sessions";
@@ -26,6 +26,55 @@ type PlayActionsParams = {
   refetchStoryPacks: () => unknown;
   refetchSessions: () => unknown;
 };
+
+type SandboxMutationParams = {
+  sessionId: string;
+  setLastBackendPayload: (payload: unknown) => void;
+  addLog: (message: string) => void;
+  appendError: (err: unknown) => void;
+};
+
+/**
+ * 功能：集中创建沙盒并入、回滚和差异预览 mutation，避免主 hook 继续膨胀。
+ * 入参：SandboxMutationParams，包含 sessionId、后端载荷回写、日志和错误处理入口。
+ * 出参：object，包含 commitMutation、discardMutation、sandboxDiffMutation。
+ * 异常：接口异常由 mutation onError 转交 appendError；hook 本身不抛业务异常。
+ */
+function useSandboxMutations({
+  sessionId,
+  setLastBackendPayload,
+  addLog,
+  appendError,
+}: SandboxMutationParams) {
+  const commitMutation = useMutation({
+    mutationFn: async () => commitSandbox(sessionId),
+    onSuccess: (payload) => {
+      setLastBackendPayload(payload);
+      addLog("沙盒并入成功");
+    },
+    onError: (err) => appendError(err),
+  });
+
+  const discardMutation = useMutation({
+    mutationFn: async () => discardSandbox(sessionId),
+    onSuccess: (payload) => {
+      setLastBackendPayload(payload);
+      addLog("沙盒回滚成功");
+    },
+    onError: (err) => appendError(err),
+  });
+
+  const sandboxDiffMutation = useMutation({
+    mutationFn: async () => previewSandboxDiff(sessionId),
+    onSuccess: (payload) => {
+      setLastBackendPayload(payload);
+      addLog("沙盒差异已预览");
+    },
+    onError: (err) => appendError(err),
+  });
+
+  return { commitMutation, discardMutation, sandboxDiffMutation };
+}
 
 /**
  * 功能：集中管理游玩页的后端动作、mutation 成功回写和玩家回合提交。
@@ -212,16 +261,11 @@ export function usePlayActions({
     onError: (err) => appendError(err),
   });
 
-  const commitMutation = useMutation({
-    mutationFn: async () => commitSandbox(sessionId),
-    onSuccess: () => addLog("沙盒并入成功"),
-    onError: (err) => appendError(err),
-  });
-
-  const discardMutation = useMutation({
-    mutationFn: async () => discardSandbox(sessionId),
-    onSuccess: () => addLog("沙盒回滚成功"),
-    onError: (err) => appendError(err),
+  const { commitMutation, discardMutation, sandboxDiffMutation } = useSandboxMutations({
+    sessionId,
+    setLastBackendPayload,
+    addLog,
+    appendError,
   });
 
   const importPackMutation = useMutation({
@@ -336,6 +380,7 @@ export function usePlayActions({
     resetMutation,
     commitMutation,
     discardMutation,
+    sandboxDiffMutation,
     importPackMutation,
     deletePackMutation,
     appendError,

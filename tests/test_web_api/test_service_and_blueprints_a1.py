@@ -1562,6 +1562,8 @@ def test_build_memory_uses_summary_step_and_context_window(
     summary, items = build_memory(turns, max_turns=20)
     assert "第2-3回合阶段摘要" in summary
     assert "第4-5回合阶段摘要" in summary
+    assert "玩家动作[a2；a3]" in summary
+    assert "玩家动作[a4；a5]" in summary
     assert len(items) == 2
     assert items[0]["session_turn_id"] == 3
     assert items[1]["session_turn_id"] == 5

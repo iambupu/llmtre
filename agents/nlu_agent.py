@@ -138,7 +138,8 @@ class NLUAgent:
         )
 
         return (
-            self._parse_use_item_action(normalized, user_input, actor_id, action_keywords)
+            self._parse_skill_action(normalized, user_input, actor_id, action_keywords)
+            or self._parse_use_item_action(normalized, user_input, actor_id, action_keywords)
             or self._parse_attack_action(
                 normalized,
                 user_input,
@@ -181,6 +182,37 @@ class NLUAgent:
                 actor_id,
                 action_keywords,
             )
+        )
+
+    def _parse_skill_action(
+        self,
+        normalized: str,
+        user_input: str,
+        actor_id: str | None,
+        action_keywords: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        功能：解析玩家主动发动技能的动作，优先于“使用物品”处理，避免“使用专注技能”被误判为物品。
+        入参：normalized（str）：已归一化输入；user_input（str）：玩家原文；
+            actor_id（str | None）：当前角色 ID；action_keywords（dict[str, Any]）：关键词配置。
+        出参：dict[str, Any] | None，命中返回 skill 候选，否则返回 None。
+        异常：不抛异常；技能 ID 缺失时使用配置默认值，后续结算按配置降级。
+        """
+        if not self._matches_action(normalized, action_keywords, "skill"):
+            return None
+        return self._finalize_candidate(
+            {
+                "type": "skill",
+                "raw_input": user_input,
+                "actor_id": actor_id,
+                "target_id": actor_id,
+                "parameters": {
+                    "skill_id": self._extract_skill_id(normalized),
+                    "intent": self._extract_intent(normalized, "skill"),
+                },
+            },
+            user_input,
+            actor_id,
         )
 
     def _parse_sandbox_control_action(
@@ -945,6 +977,16 @@ class NLUAgent:
         """
         item_aliases = self.nlu_rules.get("item_aliases", {})
         return self._match_alias_id(normalized_input, item_aliases)
+
+    def _extract_skill_id(self, normalized_input: str) -> str:
+        """
+        功能：从规则配置的 skill_aliases 中解析技能 ID，未命中时返回默认专注技能。
+        入参：normalized_input（str）：已归一化玩家输入。
+        出参：str，解析出的技能 ID；未命中时为 focus。
+        异常：不抛异常；配置缺失按 focus 降级，保持技能基础链路可玩。
+        """
+        skill_aliases = self.nlu_rules.get("skill_aliases", {})
+        return self._match_alias_id(normalized_input, skill_aliases) or "focus"
 
     def _extract_intent(self, normalized_input: str, fallback: str) -> str:
         """

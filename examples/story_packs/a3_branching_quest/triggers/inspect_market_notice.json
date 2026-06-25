@@ -1,0 +1,19 @@
+{
+  "trigger_id": "inspect_market_notice",
+  "type": "inspect",
+  "label": "告示日期不符",
+  "description": "玩家检查白盐夜市的潮湿告示，发现官盐封仓日期晚于真实落款。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "market_square",
+    "interaction_id": "inspect_market_notice",
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "active",
+    "target_stage_id": "gather_leads",
+    "flag": "market_notice_date_mismatch",
+    "narrative_text": "告示落款被雨水泡开，真实日期比外层墨迹早了一天，说明封仓命令曾被人重写。",
+    "memory_text": "白盐夜市的守备告示存在日期重写痕迹，私盐案可能有人提前封仓遮掩。"
+  },
+  "once": true,
+  "priority": 90
+}

@@ -136,6 +136,7 @@ export function App() {
     resetMutation,
     commitMutation,
     discardMutation,
+    sandboxDiffMutation,
     importPackMutation,
     deletePackMutation,
     submitTurn,
@@ -259,6 +260,7 @@ export function App() {
         }}
         onReadMemory={() => memoryMutation.mutate()}
         onRefreshMemory={() => refreshMemoryMutation.mutate()}
+        onPreviewSandboxDiff={() => sandboxDiffMutation.mutate()}
         onCommitMemory={() => commitMutation.mutate()}
         onDiscardMemory={() => discardMutation.mutate()}
         debugPanelData={debugPanelData}

@@ -947,6 +947,42 @@ def _character_exists(character_id: str) -> bool:
     return row is not None
 
 
+def _memory_turn_line(turn: dict[str, Any]) -> tuple[int, str]:
+    """
+    功能：把单条回合记录转换为记忆摘要行和可回放回合 ID。
+    入参：turn（dict[str, Any]）：已过滤后的回合字典，允许字段缺失。
+    出参：tuple[int, str]，分别为回合序号和中文摘要行。
+    异常：session_turn_id/turn_id 无法转为 int 时向上抛出，由摘要降级分支处理。
+    """
+    turn_id = int(turn.get("session_turn_id", turn.get("turn_id", 0)))
+    user_input = str(turn.get("user_input", ""))
+    final_response = str(turn.get("final_response", ""))
+    return turn_id, f"第{turn_id}回合：输入[{user_input}] -> 响应[{final_response}]"
+
+
+def _memory_chunk_summary_line(chunk: list[dict[str, Any]]) -> tuple[int, str]:
+    """
+    功能：把一个摘要分段压缩为单行上下文，保留分段内全部玩家输入。
+    入参：chunk（list[dict[str, Any]]）：同一摘要分段的连续回合。
+    出参：tuple[int, str]，分别为分段结束回合号和摘要行。
+    异常：回合号无法转为 int 时向上抛出，由摘要降级分支处理。
+    """
+    chunk_start_turn = int(chunk[0].get("session_turn_id", chunk[0].get("turn_id", 0)))
+    chunk_end_turn = int(chunk[-1].get("session_turn_id", chunk[-1].get("turn_id", 0)))
+    inputs = [str(turn.get("user_input", "")) for turn in chunk if str(turn.get("user_input", ""))]
+    responses = [
+        str(turn.get("final_response", "")) for turn in chunk if str(turn.get("final_response", ""))
+    ]
+    # 上下文完整性边界：分段摘要可以压缩单条反馈长度，但不能丢弃玩家输入。
+    compact_inputs = "；".join(inputs)
+    compact_responses = "；".join(response[:160] for response in responses)
+    summary_line = (
+        f"第{chunk_start_turn}-{chunk_end_turn}回合阶段摘要："
+        f"玩家动作[{compact_inputs}]；系统反馈[{compact_responses}]"
+    )
+    return chunk_end_turn, summary_line
+
+
 def build_memory(turns: list[dict[str, Any]], max_turns: int) -> tuple[str, list[dict[str, Any]]]:
     """
     功能：按最近有效剧情回合生成记忆摘要与可回放片段。
@@ -970,22 +1006,9 @@ def build_memory(turns: list[dict[str, Any]], max_turns: int) -> tuple[str, list
     items: list[dict[str, Any]] = []
     lines: list[str] = []
 
-    def _to_line(turn: dict[str, Any]) -> tuple[int, str]:
-        """
-        功能：把单条回合记录转换为记忆摘要行和可回放回合 ID。
-        入参：turn（dict[str, Any]）：已过滤后的回合字典，允许字段缺失。
-        出参：tuple[int, str]，分别为回合序号和中文摘要行。
-        异常：session_turn_id/turn_id 无法转为 int 时向上抛出，由外层摘要降级分支处理。
-        """
-        turn_id = int(turn.get("session_turn_id", turn.get("turn_id", 0)))
-        user_input = str(turn.get("user_input", ""))
-        final_response = str(turn.get("final_response", ""))
-        line = f"第{turn_id}回合：输入[{user_input}] -> 响应[{final_response}]"
-        return turn_id, line
-
     if summary_step == 0:
         for turn in recent:
-            turn_id, line = _to_line(turn)
+            turn_id, line = _memory_turn_line(turn)
             lines.append(line)
             items.append({"session_turn_id": turn_id, "text": line})
         return "\n".join(lines), items
@@ -998,32 +1021,17 @@ def build_memory(turns: list[dict[str, Any]], max_turns: int) -> tuple[str, list
             chunk = recent[start : start + summary_step]
             if not chunk:
                 continue
-            chunk_start_turn = int(chunk[0].get("session_turn_id", chunk[0].get("turn_id", 0)))
-            chunk_end_turn = int(chunk[-1].get("session_turn_id", chunk[-1].get("turn_id", 0)))
-            inputs = [
-                str(turn.get("user_input", "")) for turn in chunk if str(turn.get("user_input", ""))
-            ]
-            responses = [
-                str(turn.get("final_response", ""))
-                for turn in chunk
-                if str(turn.get("final_response", ""))
-            ]
-            compact_inputs = "；".join(inputs[:3])
-            compact_responses = "；".join(responses[:2])
-            summary_line = (
-                f"第{chunk_start_turn}-{chunk_end_turn}回合阶段摘要："
-                f"玩家动作[{compact_inputs}]；系统反馈[{compact_responses}]"
-            )
+            chunk_end_turn, summary_line = _memory_chunk_summary_line(chunk)
             lines.append(summary_line)
             items.append({"session_turn_id": chunk_end_turn, "text": summary_line})
         # 不足一个步长的尾部保留原始逐条细节，避免最新上下文过度压缩。
         for turn in recent[summarized_tail_start:]:
-            turn_id, line = _to_line(turn)
+            turn_id, line = _memory_turn_line(turn)
             lines.append(line)
             items.append({"session_turn_id": turn_id, "text": line})
     except Exception:  # noqa: BLE001
         for turn in recent:
-            turn_id, line = _to_line(turn)
+            turn_id, line = _memory_turn_line(turn)
             lines.append(line)
             items.append({"session_turn_id": turn_id, "text": line})
     return "\n".join(lines), items

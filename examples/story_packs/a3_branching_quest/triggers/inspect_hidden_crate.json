@@ -1,0 +1,31 @@
+{
+  "trigger_id": "inspect_hidden_crate",
+  "type": "inspect",
+  "label": "盐箱官封残蜡",
+  "description": "玩家检查旧码头网下盐箱，发现官封蜡印被刮掉。",
+  "effects": ["narrative", "grant_item", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "smuggler_quay",
+    "interaction_id": "inspect_hidden_crate",
+    "item_id": "salt_wax_rubbing",
+    "quantity": 1,
+    "grant_items": [
+      {
+        "item_id": "salt_wax_rubbing",
+        "quantity": 1
+      },
+      {
+        "item_id": "a3_field_ration",
+        "quantity": 1
+      }
+    ],
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "active",
+    "target_stage_id": "choose_approach",
+    "flag": "hidden_crate_has_official_wax",
+    "narrative_text": "渔网下的盐箱边角残着一线官封蜡印，刮痕很新，像是刚从封契库流出。",
+    "memory_text": "旧码头盐箱残留官封蜡印，任务推进到必须选择公开交证据或暗中交易。"
+  },
+  "once": true,
+  "priority": 95
+}

@@ -102,18 +102,33 @@ class TriggerEffectApplier:
             physics_diff（dict[str, Any]）：待追加的确定性差异；
             active_character_id（str）：默认 owner_id。
         出参：None。
-        异常：数量解析失败时降级为 1，不向上抛出。
+        异常：数量解析失败时降级为 1，不向上抛出；grant_items 条目非法时跳过。
         """
-        item_id = _string_from_conditions(conditions, "item_id", "grant_item_id")
-        if not item_id:
-            return
-        quantity = conditions.get("quantity", 1)
-        try:
-            qty = int(quantity)
-        except TypeError, ValueError:
-            qty = 1
         owner_id = _string_from_conditions(conditions, "owner_id") or active_character_id
-        _append_granted_item(physics_diff, item_id, owner_id, max(1, qty))
+        raw_items = conditions.get("grant_items")
+        if isinstance(raw_items, list):
+            for raw_item in raw_items:
+                if not isinstance(raw_item, Mapping):
+                    continue
+                item_id = _string_from_mapping(raw_item, "item_id", "grant_item_id")
+                if not item_id:
+                    continue
+                _append_granted_item(
+                    physics_diff,
+                    item_id,
+                    _string_from_mapping(raw_item, "owner_id") or owner_id,
+                    _positive_int(raw_item.get("quantity", 1)),
+                )
+            return
+
+        item_id = _string_from_conditions(conditions, "item_id", "grant_item_id")
+        if item_id:
+            _append_granted_item(
+                physics_diff,
+                item_id,
+                owner_id,
+                _positive_int(conditions.get("quantity", 1)),
+            )
 
     def _apply_set_flag(
         self,
@@ -177,6 +192,7 @@ class TriggerEffectApplier:
                 quest_states[current_index],
                 next_status=next_status,
                 next_stage_id=next_stage,
+                data_patch=_quest_data_patch_from_trigger(trigger_def, next_stage),
             )
         except Exception as exc:
             logger.warning("update_quest effect 执行失败: %s", exc)
@@ -270,6 +286,33 @@ def _string_from_conditions(conditions: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
+def _string_from_mapping(value: Mapping[str, Any], *keys: str) -> str:
+    """
+    功能：从任意 mapping 中读取第一个非空字符串，供 grant_items 子项复用。
+    入参：value（Mapping[str, Any]）：来源对象；keys（str）：候选字段。
+    出参：str，未命中时返回空字符串。
+    异常：不抛异常；非字符串值被忽略。
+    """
+    for key in keys:
+        item = value.get(key)
+        if isinstance(item, str) and item.strip():
+            return item.strip()
+    return ""
+
+
+def _positive_int(value: Any) -> int:
+    """
+    功能：把未知数量收敛为正整数，作为授予物品数量的降级边界。
+    入参：value（Any）：可能来自触发器 conditions 或 grant_items 子项。
+    出参：int，至少为 1。
+    异常：类型转换失败时内部降级为 1。
+    """
+    try:
+        return max(1, int(value))
+    except TypeError, ValueError:
+        return 1
+
+
 def _append_unique_string(target: list[Any], value: Any) -> None:
     """
     功能：向列表追加非空且未存在的字符串。
@@ -282,6 +325,33 @@ def _append_unique_string(target: list[Any], value: Any) -> None:
     normalized = value.strip()
     if normalized and normalized not in target:
         target.append(normalized)
+
+
+def _quest_data_patch_from_trigger(
+    trigger_def: TriggerDef,
+    target_stage_id: str,
+) -> dict[str, Any]:
+    """
+    功能：从 update_quest 触发器条件中提取应写入 QuestRuntimeState.data 的 A3 元数据。
+    入参：trigger_def（TriggerDef）：当前触发器定义；target_stage_id（str）：本次目标阶段。
+    出参：dict[str, Any]，仅包含明确声明的 branch_path、branch_choices 或 consequence_refs。
+    异常：不抛异常；缺少 A3 字段时返回空字典，保持 A2 触发器兼容。
+    """
+    conditions = trigger_def.conditions
+    branch_group = _string_from_conditions(conditions, "a3_branch_group")
+    branch_value = _string_from_conditions(conditions, "branch_value")
+    patch: dict[str, Any] = {}
+    if branch_value:
+        patch["branch_path"] = branch_value
+    if branch_group and branch_value:
+        patch["branch_choice"] = {
+            "group": branch_group,
+            "value": branch_value,
+            "stage_id": target_stage_id,
+            "trigger_id": trigger_def.trigger_id,
+        }
+        patch["consequence_ref"] = trigger_def.trigger_id
+    return patch
 
 
 def _append_granted_item(

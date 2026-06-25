@@ -15,6 +15,7 @@ from game_workflows.main_loop_config import DEFAULT_MAIN_LOOP_RULES
 from game_workflows.main_loop_resolution_helpers import (
     _build_runtime_event_contexts,
     _evaluate_pack_triggers,
+    _PackTriggerEvaluationInput,
     resolve_action_sync,
 )
 from game_workflows.main_loop_scene_helpers import (
@@ -490,13 +491,15 @@ def test_evaluate_pack_triggers_supports_item_consumed_event() -> None:
     }
 
     events, fired_ids = _evaluate_pack_triggers(
-        pack_triggers={"evt_ticket_consumed": trigger},
-        state={"active_character_id": "player_01", "active_character": {}},
-        action_result={"action": "use_item"},
-        physics_diff={"consumed_item_id": "boat_ticket"},
-        current_scene_id="ferry_landing",
-        fired_ids=set(),
-        quest_states=[],
+        _PackTriggerEvaluationInput(
+            pack_triggers={"evt_ticket_consumed": trigger},
+            state={"active_character_id": "player_01", "active_character": {}},
+            action_result={"action": "use_item"},
+            physics_diff={"consumed_item_id": "boat_ticket"},
+            current_scene_id="ferry_landing",
+            fired_ids=set(),
+            quest_states=[],
+        )
     )
 
     assert fired_ids == {"evt_ticket_consumed"}
@@ -542,17 +545,19 @@ def test_evaluate_pack_triggers_skips_source_enter_scene_when_moving() -> None:
     }
 
     events, fired_ids = _evaluate_pack_triggers(
-        pack_triggers={
-            "enter_ferry_landing_intro": source_trigger,
-            "enter_ledgers_room_intro": target_trigger,
-        },
-        state={"active_character_id": "player_01", "active_character": {}},
-        action_result={"action": "move", "target_id": "ledgers_room"},
-        physics_diff={"location_id": "ledgers_room"},
-        current_scene_id="ferry_landing",
-        fired_ids=set(),
-        scene_switch_to="ledgers_room",
-        quest_states=[],
+        _PackTriggerEvaluationInput(
+            pack_triggers={
+                "enter_ferry_landing_intro": source_trigger,
+                "enter_ledgers_room_intro": target_trigger,
+            },
+            state={"active_character_id": "player_01", "active_character": {}},
+            action_result={"action": "move", "target_id": "ledgers_room"},
+            physics_diff={"location_id": "ledgers_room"},
+            current_scene_id="ferry_landing",
+            fired_ids=set(),
+            scene_switch_to="ledgers_room",
+            quest_states=[],
+        )
     )
 
     assert [event["trigger_id"] for event in events] == ["enter_ledgers_room_intro"]

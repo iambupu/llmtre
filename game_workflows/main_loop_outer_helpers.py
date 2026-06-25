@@ -105,6 +105,79 @@ async def emit_outer_events(loop: Any, state: FlowState) -> dict[str, Any]:
     return {"status": "ok", "detail": {"mode": "sync"}}
 
 
+def enqueue_outer_events(loop: Any, state: FlowState) -> dict[str, Any]:
+    """
+    功能：把当前回合外环事件快速写入补偿队列，避免玩家响应等待外环 Workflow 执行。
+    入参：loop（Any）：MainEventLoop 实例，需提供 db_updater 与外环配置；
+        state（FlowState）：当前回合状态。
+    出参：dict[str, Any]，包含 status/detail，detail.mode 固定为 outbox。
+    异常：单个事件入队失败会被捕获并写入 failed_events，不向上抛出阻断主回合。
+    """
+    queued_events: list[dict[str, Any]] = []
+    failed_events: list[dict[str, str]] = []
+
+    def _enqueue(event_name: str, payload: dict[str, object]) -> None:
+        """
+        功能：入队单个外环事件并记录队列 ID。
+        入参：event_name（str）：外环事件名；payload（dict[str, object]）：可 JSON 序列化载荷。
+        出参：None。
+        异常：DB 写入失败时捕获并记录 failed_events。
+        """
+        try:
+            event_id = loop.db_updater.enqueue_outer_event(
+                event_name,
+                payload,
+                "queued_for_async_replay",
+                attempts=0,
+            )
+            queued_events.append({"event": event_name, "id": event_id})
+        except Exception as error:  # noqa: BLE001
+            logger.warning("外环事件入队失败[event=%s]，已降级忽略: %s", event_name, error)
+            failed_events.append({"event": event_name, "error": str(error)})
+
+    if state.get("is_valid") and state.get("physics_diff"):
+        _enqueue(
+            "state_changed",
+            StateChangedEvent(
+                entity_id=str(state.get("active_character_id", "")),
+                diff=dict(state.get("physics_diff") or {}),
+                is_sandbox=bool(state.get("is_sandbox_mode", False)),
+            ).model_dump(),
+        )
+
+    _enqueue(
+        "turn_ended",
+        TurnEndedEvent(
+            turn_id=int(state.get("turn_id", 0)),
+            user_input=str(state.get("user_input", "")),
+            final_response=str(state.get("final_response", "")),
+        ).model_dump(),
+    )
+
+    if loop.outer_emit_world_evolution and state.get("should_advance_turn", True):
+        active_character: dict[str, Any] = dict(state.get("active_character") or {})
+        # Pack 回合优先使用 current_scene_id，避免世界演化围绕旧 DB location 入队。
+        current_scene_id = str(state.get("current_scene_id") or "").strip()
+        location_id = current_scene_id or str(active_character.get("location", "unknown"))
+        _enqueue(
+            "world_evolution",
+            WorldEvolutionEvent(
+                time_passed_minutes=loop.outer_world_minutes_per_turn,
+                location_id=location_id,
+            ).model_dump(),
+        )
+
+    detail: dict[str, Any] = {
+        "mode": "outbox",
+        "queued_events": queued_events,
+        "queued_to_outbox": bool(queued_events),
+    }
+    if failed_events:
+        detail["failed_events"] = failed_events
+        return {"status": "failed", "detail": detail}
+    return {"status": "ok", "detail": detail}
+
+
 def emit_outer_events_background(loop: Any, state: FlowState) -> dict[str, Any]:
     """
     功能：将外环投递放到后台任务，避免阻塞主回合返回，并返回调度结果。

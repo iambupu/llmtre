@@ -1,6 +1,7 @@
 {
   "$defs": {
     "EntityType": {
+      "description": "功能：定义实体分类枚举。\n入参：无；枚举成员在类定义中声明。\n出参：EntityType 枚举值，用于区分玩家、NPC、怪物和环境实体。\n异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。",
       "enum": [
         "player",
         "npc",
@@ -91,7 +92,7 @@
       "description": "实体类型分类"
     },
     "description": {
-      "description": "人物背景、性格和外貌描述（供 RAG 和 交互 Agent 生成对话使用）",
+      "description": "人物背景、性格和外貌描述（供 RAG 和交互 Agent 生成对话使用）",
       "title": "Description",
       "type": "string"
     },

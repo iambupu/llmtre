@@ -83,3 +83,20 @@ def test_app_page_accepts_optional_trailing_slash(tmp_path) -> None:
     assert without_slash.status_code == 200
     assert with_slash.status_code == 200
     assert "<html" in with_slash_body.lower() or "App Bootstrap" in with_slash_body
+
+
+def test_favicon_route_returns_inline_icon() -> None:
+    """
+    功能：验证 favicon 路由存在，避免浏览器打开 `/app` 时自动请求图标产生 404 控制台噪声。
+    入参：无。
+    出参：None。
+    异常：断言失败表示站点图标路由回归。
+    """
+    app = Flask(__name__)
+    app.register_blueprint(playground_blueprint)
+
+    response = app.test_client().get("/favicon.ico")
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/svg+xml"
+    assert "<svg" in response.get_data(as_text=True)

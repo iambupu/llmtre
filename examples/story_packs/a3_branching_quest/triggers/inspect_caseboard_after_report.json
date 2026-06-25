@@ -1,0 +1,21 @@
+{
+  "trigger_id": "inspect_caseboard_after_report",
+  "type": "inspect",
+  "label": "守备路线封存",
+  "description": "玩家在守备所核对案板，把公开路线的封锁记录并入证据链。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "watch_house",
+    "interaction_id": "inspect_caseboard_after_report",
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "active",
+    "target_stage_id": "seal_the_evidence",
+    "a3_branch_group": "salt_deal_approach",
+    "branch_value": "report_to_watch",
+    "flag": "watch_route_evidence_sealed",
+    "narrative_text": "案板上的封锁路线和盐箱残蜡编号对上了，公开路线的后果被写入守备所记录。",
+    "memory_text": "守备所路线完成封存，码头封锁记录进入证据链。"
+  },
+  "once": true,
+  "priority": 100
+}

@@ -13,6 +13,72 @@ export type StreamHandlers = {
   onEvent?: (event: string, payload: StreamEventPayload) => void;
 };
 
+type StreamDebugThrottle = {
+  lastGmDeltaDebugAt: number;
+};
+
+/**
+ * 功能：按 SSE 事件类型节流写入调试面板，避免 token 级 gm_delta 造成频繁刷新。
+ * 入参：event（string）：SSE 事件名；payload（StreamEventPayload）：事件载荷；
+ *   throttle（StreamDebugThrottle）：跨事件保留的节流状态。
+ * 出参：void。
+ * 异常：不显式抛异常；调试 store 写入异常按前端运行时错误暴露。
+ */
+function recordStreamDebugEvent(
+  event: string,
+  payload: StreamEventPayload,
+  throttle: StreamDebugThrottle
+): void {
+  const nowMs = Date.now();
+  if (event === "gm_delta" && nowMs - throttle.lastGmDeltaDebugAt < 250) {
+    return;
+  }
+  if (event === "gm_delta") {
+    throttle.lastGmDeltaDebugAt = nowMs;
+  }
+  useDebugStore.getState().setLastSseEvent({ event, payload });
+}
+
+/**
+ * 功能：处理单个已解析 SSE 事件，并在 done 时返回权威回合结果。
+ * 入参：event/payload：SSE 事件；handlers（StreamHandlers）：调用方事件回调；
+ *   throttle（StreamDebugThrottle）：调试事件节流状态。
+ * 出参：TurnResult | null，非 done 事件返回 null。
+ * 异常：error 事件或非法 done 载荷会抛出 Error。
+ */
+function handleStreamEvent(
+  event: string,
+  payload: StreamEventPayload,
+  handlers: StreamHandlers,
+  throttle: StreamDebugThrottle
+): TurnResult | null {
+  recordStreamDebugEvent(event, payload, throttle);
+  handlers.onEvent?.(event, payload);
+  if (event === "error") {
+    throw new Error(readStreamErrorMessage(payload));
+  }
+  if (event !== "done") {
+    return null;
+  }
+  if (typeof payload !== "object" || payload === null) {
+    throw new Error("流式 done 事件格式非法：缺少 JSON 对象载荷");
+  }
+  return payload as TurnResult;
+}
+
+/**
+ * 功能：从 SSE error 载荷中读取用户可理解的错误消息。
+ * 入参：payload（StreamEventPayload）：error 事件载荷。
+ * 出参：string，缺少 message 时返回通用错误。
+ * 异常：不抛异常。
+ */
+function readStreamErrorMessage(payload: StreamEventPayload): string {
+  if (typeof payload === "object" && payload && "message" in payload) {
+    return String(payload.message);
+  }
+  return "流式回合返回 error 事件";
+}
+
 /**
  * 功能：分页读取指定会话的后端持久化回合历史。
  * 入参：sessionId（string）：会话 ID；page（number，默认 1）：页码；pageSize（number，默认 100）：每页条数。
@@ -107,6 +173,7 @@ export async function createTurnStream(
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let donePayload: TurnResult | null = null;
+  const debugThrottle: StreamDebugThrottle = { lastGmDeltaDebugAt: 0 };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -118,23 +185,14 @@ export async function createTurnStream(
     buffer = parsed.remaining;
     for (const evt of parsed.events) {
       const payload = (evt.data ?? {}) as StreamEventPayload;
-      useDebugStore.getState().setLastSseEvent({
-        event: evt.event,
+      const nextDonePayload = handleStreamEvent(
+        evt.event,
         payload,
-      });
-      handlers.onEvent?.(evt.event, payload);
-      if (evt.event === "error") {
-        throw new Error(
-          typeof payload === "object" && payload && "message" in payload
-            ? String(payload.message)
-            : "流式回合返回 error 事件"
-        );
-      }
-      if (evt.event === "done") {
-        if (typeof payload !== "object" || payload === null) {
-          throw new Error("流式 done 事件格式非法：缺少 JSON 对象载荷");
-        }
-        donePayload = payload as TurnResult;
+        handlers,
+        debugThrottle
+      );
+      if (nextDonePayload !== null) {
+        donePayload = nextDonePayload;
       }
     }
   }

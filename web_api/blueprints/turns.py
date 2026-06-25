@@ -15,6 +15,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 from pydantic import ValidationError
 
 from state.contracts.turn import TurnResult
+from web_api.branch_consequences import build_branch_consequence_summaries
 from web_api.narrative_memory import build_narrative_memory_items
 from web_api.service import (
     DEFAULT_MEMORY_TURNS,
@@ -416,6 +417,10 @@ def _build_turn_response_payload(
     异常：字段缺失或类型非法时抛 ValidationError，交由上层统一转错误响应。
     """
     trigger_events = payload.get("trigger_events", [])
+    branch_consequences = build_branch_consequence_summaries(
+        payload=payload,
+        source_turn_id=session_turn_id,
+    )
     final_response = _merge_trigger_narrative(
         str(payload["final_response"]),
         trigger_events,
@@ -452,6 +457,8 @@ def _build_turn_response_payload(
         "errors": payload["errors"],
         "trigger_events": trigger_events,
         "quest_updates": payload.get("quest_updates", []),
+        "quest_states": payload.get("quest_states", payload.get("quest_updates", [])),
+        "branch_consequences": branch_consequences,
         "pack_runtime_errors": payload.get("pack_runtime_errors", []),
     }
     response_payload["trace"] = _normalize_turn_trace(response_payload)
@@ -1508,6 +1515,8 @@ def get_turn(session_id: str, session_turn_id: int) -> tuple[Any, int]:
             "physics_diff": target["physics_diff"],
             "trigger_events": target.get("trigger_events", []),
             "quest_updates": target.get("quest_updates", []),
+            "quest_states": target.get("quest_states", target.get("quest_updates", [])),
+            "branch_consequences": target.get("branch_consequences", []),
             "final_response": target["final_response"],
             "memory_summary": target["memory_summary"],
         }

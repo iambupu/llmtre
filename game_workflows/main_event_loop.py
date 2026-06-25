@@ -33,6 +33,7 @@ from game_workflows.main_loop_config import load_main_loop_rules
 from game_workflows.main_loop_outer_helpers import (
     emit_outer_events,
     emit_outer_events_background,
+    enqueue_outer_events,
     replay_outbox_once,
     schedule_outbox_replay,
 )
@@ -898,16 +899,14 @@ class MainEventLoop:
         功能：根据外环桥接类型写入当前回合 outer_emit_result。
         入参：result（FlowState）：已归一化的回合结果，会被原地补充 outer_emit_result。
         出参：None。
-        异常：外环投递异常由 _emit_outer_events 内部降级或向上抛出，沿用原策略。
+        异常：外环入队异常由 enqueue_outer_events 内部降级，不阻断玩家回合返回。
         """
-        # A1 可验收要求：outer.emitted 必须反映当前回合可观测结果，
-        # 不能依赖 asyncio.run 结束后会被取消的后台任务。
+        # 响应边界：Web 路径使用一次性 asyncio.run，后台 task 会在事件循环关闭时取消；
+        # 因此这里只做可靠入队，把耗时 Workflow 留给 outbox 重放器。
         if isinstance(self.outer_bridge, NoOpOuterLoopBridge):
             result["outer_emit_result"] = {"status": "skipped", "detail": {"mode": "noop"}}
-        elif isinstance(self.outer_bridge, WorkflowOuterLoopBridge):
-            result["outer_emit_result"] = await self._emit_outer_events(result)
         else:
-            result["outer_emit_result"] = await self._emit_outer_events(result)
+            result["outer_emit_result"] = enqueue_outer_events(self, result)
 
     async def run(
         self,

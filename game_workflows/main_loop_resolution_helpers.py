@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
 from game_workflows.pack_runtime import PackRuntimeContext, PackRuntimeResult
@@ -18,6 +19,54 @@ from tools.packs.trigger_evaluator import TriggerEvaluator, evaluate_triggers
 from tools.roll.dice_roller import check_success, roll_d20, roll_dice
 
 logger = logging.getLogger("Workflow.MainLoop")
+
+
+@dataclass(frozen=True)
+class _InteractionMatchFacts:
+    """
+    功能：承载一次动作匹配交互时需要比较的标准化文本事实。
+    入参：target/hint/raw_input（str）：已标准化的目标、对象提示和玩家原文。
+    出参：_InteractionMatchFacts。
+    异常：dataclass 构造不做业务校验，调用方负责传入标准化文本。
+    """
+
+    target: str
+    hint: str
+    raw_input: str
+
+
+@dataclass(frozen=True)
+class _InteractionScoreWeights:
+    """
+    功能：承载交互候选在不同命中来源下的基础评分权重。
+    入参：target/hint/raw_input（int）：target、object_hint 和玩家原文命中的基础分。
+    出参：_InteractionScoreWeights。
+    异常：dataclass 构造不做业务校验，调用方使用正整数常量。
+    """
+
+    target: int
+    hint: int
+    raw_input: int
+
+
+@dataclass(frozen=True)
+class _PackTriggerEvaluationInput:
+    """
+    功能：集中承载剧本包触发器评估所需输入，避免内部 helper 参数继续膨胀。
+    入参：pack_triggers/state/action_result/physics_diff/current_scene_id/fired_ids/scene_switch_to/
+        quest_states：触发器定义、回合状态、动作事实、确定性差异、场景与任务运行态。
+    出参：_PackTriggerEvaluationInput。
+    异常：dataclass 构造不做业务校验，评估函数负责字段降级和异常转换。
+    """
+
+    pack_triggers: dict[str, Any]
+    state: Mapping[str, Any]
+    action_result: dict[str, Any]
+    physics_diff: dict[str, Any]
+    current_scene_id: str
+    fired_ids: set[str]
+    scene_switch_to: str | None = None
+    quest_states: list[QuestRuntimeState] | None = None
 
 
 class PackTriggerRuntimeError(RuntimeError):
@@ -101,7 +150,7 @@ def _resolve_action_physics(
         return _resolve_use_item_physics(loop=loop, action=action), None
     if action_type == "talk":
         return loop._resolve_configured_action("talk", {}), None
-    if action_type in {"observe", "wait", "rest", "inspect", "interact"}:
+    if action_type in {"observe", "wait", "rest", "inspect", "interact", "skill"}:
         return loop._resolve_configured_action(action_type, {}), None
     if action_type in {"commit_sandbox", "discard_sandbox"}:
         return loop._resolve_configured_action(action_type, {}), None
@@ -311,14 +360,16 @@ def _build_pack_runtime_flow_patch(
     if pack_runtime.triggers:
         try:
             trigger_events, additional_fired = _evaluate_pack_triggers(
-                pack_triggers=pack_runtime.triggers,
-                state=state,
-                action_result=trigger_action_result,
-                physics_diff=physics_diff,
-                current_scene_id=str(state.get("current_scene_id", "")),
-                fired_ids=new_fired_ids,
-                scene_switch_to=scene_switch_to,
-                quest_states=runtime_quest_states,
+                _PackTriggerEvaluationInput(
+                    pack_triggers=pack_runtime.triggers,
+                    state=state,
+                    action_result=trigger_action_result,
+                    physics_diff=physics_diff,
+                    current_scene_id=str(state.get("current_scene_id", "")),
+                    fired_ids=new_fired_ids,
+                    scene_switch_to=scene_switch_to,
+                    quest_states=runtime_quest_states,
+                )
             )
             new_fired_ids.update(additional_fired)
             effect_result = apply_trigger_effects(
@@ -433,32 +484,95 @@ def _matches_interaction(
     出参：bool，命中 interaction_id/label/target_ref/aliases 任一匹配条件返回 True。
     异常：不抛异常；空字段被标准化为空字符串并自然跳过。
     """
+    return (
+        _score_interaction_match(
+            interaction,
+            action_type=action_type,
+            raw_input=raw_input,
+            target_id=target_id,
+            object_hint=object_hint,
+        )
+        > 0
+    )
+
+
+def _score_interaction_match(
+    interaction: StoryPackInteractionDef,
+    *,
+    action_type: str,
+    raw_input: str,
+    target_id: str,
+    object_hint: str,
+) -> int:
+    """
+    功能：为动作与剧本交互的匹配程度打分，长标签/长别名优先于通用 target_ref。
+    入参：interaction（StoryPackInteractionDef）：候选交互；action_type/raw_input/target_id/object_hint：
+        NLU 动作事实，语义同 _matches_interaction。
+    出参：int，0 表示不匹配；分数越高表示越具体，供同物体多交互时选择正确入口。
+    异常：不抛异常；缺失字段按空字符串降级。
+    """
     if action_type != "interact" and interaction.kind != action_type:
-        return False
-    candidates = [
-        interaction.interaction_id,
-        interaction.label,
+        return 0
+    facts = _InteractionMatchFacts(
+        target=_normalize_text(target_id),
+        hint=_normalize_text(object_hint),
+        raw_input=_normalize_text(raw_input),
+    )
+    # 先比较交互 ID、标签和别名，再用 target_ref 兜底，避免同物体多个交互被通用目标抢走。
+    specific_score = max(
+        (
+            _score_interaction_candidate(
+                candidate,
+                facts=facts,
+                weights=_InteractionScoreWeights(target=1000, hint=800, raw_input=600),
+            )
+            for candidate in [interaction.interaction_id, interaction.label, *interaction.aliases]
+        ),
+        default=0,
+    )
+    target_ref_score = _score_interaction_candidate(
         interaction.target_ref or "",
-        *interaction.aliases,
-    ]
-    normalized_target = _normalize_text(target_id)
-    normalized_hint = _normalize_text(object_hint)
-    normalized_input = _normalize_text(raw_input)
-    for candidate in candidates:
-        normalized = _normalize_text(candidate)
-        if not normalized:
-            continue
-        if normalized_target and normalized_target == normalized:
-            return True
-        if normalized_hint and (
-            normalized_hint == normalized
-            or normalized_hint in normalized
-            or normalized in normalized_hint
-        ):
-            return True
-        if normalized_input and normalized in normalized_input:
-            return True
-    return False
+        facts=facts,
+        weights=_InteractionScoreWeights(target=100, hint=80, raw_input=60),
+    )
+    return max(specific_score, target_ref_score)
+
+
+def _score_interaction_candidate(
+    candidate: str,
+    *,
+    facts: _InteractionMatchFacts,
+    weights: _InteractionScoreWeights,
+) -> int:
+    """
+    功能：对单个交互候选文本评分，集中处理 target、object_hint 和原始输入三种命中来源。
+    入参：candidate（str）：候选 ID/标签/别名；
+        facts（_InteractionMatchFacts）：已标准化的动作事实；
+        weights（_InteractionScoreWeights）：不同来源的基础权重。
+    出参：int，0 表示未命中；命中时返回基础权重加候选长度。
+    异常：不抛异常；空候选直接返回 0。
+    """
+    normalized = _normalize_text(candidate)
+    if not normalized:
+        return 0
+    scores: list[int] = []
+    if facts.target and facts.target == normalized:
+        scores.append(weights.target + len(normalized))
+    if _text_overlaps(facts.hint, normalized):
+        scores.append(weights.hint + len(normalized))
+    if facts.raw_input and normalized in facts.raw_input:
+        scores.append(weights.raw_input + len(normalized))
+    return max(scores, default=0)
+
+
+def _text_overlaps(left: str, right: str) -> bool:
+    """
+    功能：判断两个已标准化文本是否存在包含式重叠。
+    入参：left/right（str）：已标准化文本。
+    出参：bool，两者非空且任一方包含另一方时为 True。
+    异常：不抛异常。
+    """
+    return bool(left and right and (left == right or left in right or right in left))
 
 
 def _resolve_interaction_id(
@@ -484,16 +598,20 @@ def _resolve_interaction_id(
     raw_input = str(action.get("raw_input") or "")
     target_id = str(action.get("target_id") or "")
     object_hint = str(params.get("object_hint") or "")
+    best_match = ""
+    best_score = 0
     for interaction in pack_scene.interactables:
-        if _matches_interaction(
+        score = _score_interaction_match(
             interaction,
             action_type=action_type,
             raw_input=raw_input,
             target_id=target_id,
             object_hint=object_hint,
-        ):
-            return interaction.interaction_id
-    return ""
+        )
+        if score > best_score:
+            best_match = interaction.interaction_id
+            best_score = score
+    return best_match
 
 
 def _build_trigger_action_result(
@@ -533,29 +651,16 @@ def _build_trigger_action_result(
 
 
 def _evaluate_pack_triggers(
-    pack_triggers: dict[str, Any],
-    state: Mapping[str, Any],
-    action_result: dict[str, Any],
-    physics_diff: dict[str, Any],
-    current_scene_id: str,
-    fired_ids: set[str],
-    scene_switch_to: str | None = None,
-    quest_states: list[QuestRuntimeState] | None = None,
+    request: _PackTriggerEvaluationInput,
 ) -> tuple[list[dict[str, Any]], set[str]]:
     """
     功能：评估剧本包触发器，返回本轮触发事件与合并后的已触发 ID 集合。
-    入参：pack_triggers（dict[str, Any]）：当前 pack 触发器索引；
-        state（Mapping[str, Any]）：回合状态；
-        action_result（dict[str, Any]）：动作结算摘要；
-        physics_diff（dict[str, Any]）：确定性结算差异，用于生成运行时事件上下文；
-        current_scene_id（str）：当前场景 ID；fired_ids（set[str]）：已触发 ID；
-        scene_switch_to（str | None，默认 None）：本轮出口切换目标；
-        quest_states（list[QuestRuntimeState] | None，默认 None）：任务运行态。
+    入参：request（_PackTriggerEvaluationInput）：触发器定义、回合状态、动作事实、场景与任务运行态。
     出参：tuple[list[dict[str, Any]], set[str]]，事件 payload 与最新 fired_id 集合。
     异常：触发器反序列化失败会记录日志并返回空事件；evaluate_triggers 异常由调用方捕获。
     """
     trigger_defs: list[Any] = []
-    for trigger_key, raw in pack_triggers.items():
+    for trigger_key, raw in request.pack_triggers.items():
         try:
             if isinstance(raw, TriggerDef):
                 trigger_defs.append(raw)
@@ -565,49 +670,53 @@ def _evaluate_pack_triggers(
             raise PackTriggerRuntimeError(f"触发器定义反序列化失败: {trigger_key}: {exc}") from exc
 
     session_metadata: dict[str, Any] = {
-        "fired_trigger_ids": sorted(fired_ids),
-        "active_character": dict(state.get("active_character") or {}),
+        "fired_trigger_ids": sorted(request.fired_ids),
+        "active_character": dict(request.state.get("active_character") or {}),
     }
     include_current_enter_scene = _should_evaluate_current_enter_scene(
         trigger_defs=trigger_defs,
-        current_scene_id=current_scene_id,
-        fired_ids=fired_ids,
-        scene_switch_to=scene_switch_to,
+        current_scene_id=request.current_scene_id,
+        fired_ids=request.fired_ids,
+        scene_switch_to=request.scene_switch_to,
     )
 
     all_events_raw = evaluate_triggers(
         trigger_defs=trigger_defs,
         session_metadata=session_metadata,
-        current_scene_id=current_scene_id,
-        action_result=action_result,
-        quest_states=quest_states or [],
+        current_scene_id=request.current_scene_id,
+        action_result=request.action_result,
+        quest_states=request.quest_states or [],
         runtime_events=_build_runtime_event_contexts(
-            state=state,
-            action_result=action_result,
-            physics_diff=physics_diff,
-            current_scene_id=current_scene_id,
-            scene_switch_to=scene_switch_to,
+            state=request.state,
+            action_result=request.action_result,
+            physics_diff=request.physics_diff,
+            current_scene_id=request.current_scene_id,
+            scene_switch_to=request.scene_switch_to,
         ),
         # 场景进入触发器的补评估只服务于“直接运行主循环且尚未创建 session 初始事件”的场景；
         # 移动回合仍由下方目标场景补触发，避免离开源场景时播放源场景开场。
         include_enter_scene=include_current_enter_scene,
     )
 
-    if scene_switch_to and scene_switch_to != current_scene_id:
-        evaluator_obj = TriggerEvaluator(trigger_defs, fired_ids)
-        enter_events = evaluator_obj.evaluate("enter_scene", {"scene_id": scene_switch_to})
+    if request.scene_switch_to and request.scene_switch_to != request.current_scene_id:
+        evaluator_obj = TriggerEvaluator(trigger_defs, request.fired_ids)
+        enter_events = evaluator_obj.evaluate("enter_scene", {"scene_id": request.scene_switch_to})
         existing_ids = {e.trigger_id for e in all_events_raw}
         for evt in enter_events:
             if evt.trigger_id not in existing_ids:
                 all_events_raw.append(evt)
 
-    new_fired = set(fired_ids)
+    new_fired = set(request.fired_ids)
     event_dicts: list[dict[str, Any]] = []
     for evt in all_events_raw:
         new_fired.add(evt.trigger_id)
         event_dicts.append(evt.model_dump())
 
-    logger.info("触发器评估完成: 场景=%s, 触发=%d 个事件", current_scene_id, len(event_dicts))
+    logger.info(
+        "触发器评估完成: 场景=%s, 触发=%d 个事件",
+        request.current_scene_id,
+        len(event_dicts),
+    )
     return event_dicts, new_fired
 
 

@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "item_id": "a3_field_ration",
+    "name": "现场盐饼",
+    "description": "守备所常备的应急盐饼，可在长回合试玩中验证物品消耗与生命恢复。",
+    "item_type": "consumable",
+    "effects": [
+      {
+        "target_attribute": "hp",
+        "value": 4
+      }
+    ],
+    "weight": 0.1,
+    "rarity": "common",
+    "usage_limit": 1,
+    "is_stackable": true
+  }
+]

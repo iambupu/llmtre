@@ -22,7 +22,7 @@
 
 TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念的文本 TRPG 引擎。它把数值规则、状态变化和持久化事实固定在代码与 SQLite 中，把自然语言理解和叙事表达限制在 Agent 层，目标是构建一个可连续试玩、可回滚、可验证、可扩展的 AI 跑团引擎骨架。
 
-当前 A2-Release 已进入可试玩交付态：`/app` 是推荐入口，支持 Story Pack 选择、预览、导入、删除、创建会话、继续会话和会话级历史恢复；示例剧本「赤灯下的回声」覆盖 6 个场景、11 个交互、1 条轻任务和媒体资产，可通过脚本完成外部导入与 16 回合真实试玩验收。
+当前 A3 分支与任务深化已进入可验收交付态：`/app` 是推荐入口，支持 Story Pack 选择、预览、导入、删除、创建会话、继续会话和会话级历史恢复；A3 示例包 `examples/story_packs/a3_branching_quest` 覆盖双路线任务、结构化分支后果、沙盒差异摘要和长回合试玩验收，A2 示例剧本「赤灯下的回声」继续作为可试玩基线保留。
 
 ## 核心特性
 
@@ -32,6 +32,7 @@ TRE（Text TRPG Engine）是一个以“确定性逻辑优先”为核心理念�
 - **双路 Web 接口**：同时提供普通 JSON 回合接口和 SSE 流式回合接口。
 - **结构化场景快照**：每回合返回地点、出口、可见对象、可用动作和推荐行动。
 - **Story Pack 内容系统**：支持本地包、外部 JSON 包导入、坏包诊断、会话绑定和删除包不删除历史会话。
+- **结构化任务与分支后果**：A3 支持 `quest_states` 持久化、`BranchConsequenceSummary` 分支后果摘要和 `SandboxDiffSummary` 沙盒差异摘要，前端只展示后端返回事实。
 - **玩家化 `/app` 前端**：提供场景、目标、行动分组、回合记录、任务、状态、背包、媒体和调试面板。
 - **可回滚沙盒**：支持 Active/Shadow 双表快照和 sandbox commit/discard。
 - **MOD 与 RAG 扩展**：支持 MOD 分层覆盖与 RAG 只读上下文补充。
@@ -188,6 +189,23 @@ npm run playtest:a2-release-import
 Pop-Location
 
 python -m tools.logs.check_runtime_logs --since-minutes 120
+git diff --check
+```
+
+### A3 分支任务验收
+
+下面命令覆盖 A3 示例包契约、双路线任务链、结构化分支后果、沙盒差异摘要、普通/SSE 回合等价、长回合可玩性和关键运行日志：
+
+```powershell
+python -m tools.packs.validate examples/story_packs/a3_branching_quest
+python -m tools.packs.verify_a3 examples/story_packs/a3_branching_quest
+
+Push-Location frontend
+npm run playtest:a3-branching
+npm run playtest:long-playability
+Pop-Location
+
+python -m tools.logs.check_runtime_logs --since-minutes 30
 git diff --check
 ```
 
@@ -508,5 +526,5 @@ python -m tools.logs.check_runtime_logs
 
 ## 版本信息
 
-- 当前版本：A2-Release 可试玩交付态（Story Pack 管理、会话持久化、玩家化 `/app` 与回归验收脚本已收口）
+- 当前版本：A3 分支任务可验收交付态（Story Pack 管理、会话持久化、结构化任务、分支后果、沙盒差异摘要、玩家化 `/app` 与回归验收脚本已收口）
 - 更新日志：见 [CHANGELOG.md](CHANGELOG.md)

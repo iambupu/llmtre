@@ -22,6 +22,7 @@
       "type": "object"
     },
     "ItemType": {
+      "description": "功能：定义物品分类枚举。\n入参：无；枚举成员在类定义中声明。\n出参：ItemType 枚举值，用于区分消耗品、装备、任务物品和杂项。\n异常：不抛异常；非法类型由 Pydantic/Enum 校验阶段拒绝。",
       "enum": [
         "weapon",
         "armor",

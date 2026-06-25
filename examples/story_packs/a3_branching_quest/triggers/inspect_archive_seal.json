@@ -1,0 +1,19 @@
+{
+  "trigger_id": "inspect_archive_seal",
+  "type": "inspect",
+  "label": "封契缺口结案",
+  "description": "玩家在封契库比对缺口，把分支后果与最终证据一起结案。",
+  "effects": ["narrative", "update_quest", "set_flag"],
+  "conditions": {
+    "scene_id": "archive_hall",
+    "interaction_id": "inspect_archive_seal",
+    "quest_id": "unmask_the_salt_deal",
+    "quest_status": "completed",
+    "target_stage_id": "case_closed",
+    "flag": "salt_contract_case_closed",
+    "narrative_text": "柜格缺口、盐箱残蜡和你选择路线留下的记录终于合在一起。私盐契案结案，但结案卷宗会保留你当时的路线选择。",
+    "memory_text": "你在封契库完成私盐契结案，卷宗保留了此前的分支路线后果。"
+  },
+  "once": true,
+  "priority": 100
+}

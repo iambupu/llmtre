@@ -655,19 +655,54 @@ class StoryPackRegistry:
         self.root = Path(root)
         self._packs: dict[str, StoryPackBundle] = {}
         self._diagnostics: dict[str, list[str]] = {}
+        self._signature: tuple[tuple[str, str, int, int], ...] | None = None
 
-    def refresh(self) -> None:
+    def _build_signature(self) -> tuple[tuple[str, str, int, int], ...]:
+        """
+        功能：为 registry 根目录生成轻量文件签名，用于跳过未变化目录的重复校验。
+        入参：无，读取 self.root 下目录名、文件大小和 mtime_ns。
+        出参：tuple[tuple[str, str, int, int], ...]，元素为 kind/path/mtime_ns/size。
+        异常：单个路径 stat 失败时忽略该路径，下一次 refresh 会重新比较签名。
+        """
+        if not self.root.exists():
+            return (("missing", ".", 0, 0),)
+        entries: list[tuple[str, str, int, int]] = []
+        for child in sorted(self.root.iterdir()):
+            if not child.is_dir():
+                continue
+            try:
+                child_stat = child.stat()
+            except OSError:
+                continue
+            child_name = child.name.replace("\\", "/")
+            entries.append(("dir", child_name, int(child_stat.st_mtime_ns), 0))
+            for path in sorted(child.rglob("*")):
+                try:
+                    stat_result = path.stat()
+                    relative = str(path.relative_to(self.root)).replace("\\", "/")
+                except OSError:
+                    continue
+                kind = "dir" if path.is_dir() else "file"
+                size = int(stat_result.st_size) if path.is_file() else 0
+                entries.append((kind, relative, int(stat_result.st_mtime_ns), size))
+        return tuple(entries)
+
+    def refresh(self, *, force: bool = False) -> None:
         """
         功能：重新扫描 story_packs 根目录，仅把合法 pack 放入可选 registry。
-        入参：无。
+        入参：force（bool，默认 False）：为 True 时忽略目录签名缓存，强制重新校验。
         出参：None。
         异常：不抛业务异常；坏 pack 进入 diagnostics，避免污染运行时可选列表。
         """
+        signature = self._build_signature()
+        if not force and self._signature == signature:
+            return
         packs: dict[str, StoryPackBundle] = {}
         diagnostics: dict[str, list[str]] = {}
         if not self.root.exists():
             self._packs = packs
             self._diagnostics = {"story_packs": [f"目录不存在: {self.root}"]}
+            self._signature = signature
             return
         for child in sorted(self.root.iterdir()):
             if not child.is_dir():
@@ -683,6 +718,7 @@ class StoryPackRegistry:
             packs[bundle.summary.pack_id] = bundle
         self._packs = packs
         self._diagnostics = diagnostics
+        self._signature = signature
 
     def list_summaries(self) -> list[dict[str, Any]]:
         """

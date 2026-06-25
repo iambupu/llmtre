@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveQuestStageDescription,
   resolveQuestStageTitle,
-} from "@/play/QuestPanel";
+} from "@/play/questPanelSupport";
 
 describe("play/QuestPanel", () => {
   it("完成任务显示完成态和最终阶段说明", () => {

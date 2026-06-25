@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, cast
 
 from state.contracts.memory import NarrativeMemoryItem
@@ -19,6 +20,41 @@ IDEMPOTENCY_STATUS_KEY = "__tre_idempotency_status"
 IDEMPOTENCY_STATUS_PENDING = "pending"
 IDEMPOTENCY_STATUS_ERROR = "error"
 SESSION_RUNTIME_CHARACTER_PREFIX = "pc_"
+
+
+@dataclass(slots=True)
+class _TurnHistoryJsonFields:
+    """
+    功能：集中保存 web_session_turns 中由回合结果派生的 JSON 字段。
+    入参：各字段均为已完成 json.dumps 的数据库写入值，None 表示对应列可为空。
+    出参：无；作为内部数据载体传递。
+    异常：不抛异常；字段内容由构造前的序列化逻辑负责保证。
+    """
+
+    action_intent_json: str | None
+    physics_diff_json: str | None
+    trigger_events_json: str
+    quest_updates_json: str
+    quest_states_json: str
+    branch_consequences_json: str
+
+
+@dataclass(slots=True)
+class _TurnPersistenceInput:
+    """
+    功能：封装一次回合持久化事务所需的输入，避免私有写入函数继续膨胀参数列表。
+    入参：connection 为已开启事务的 SQLite 连接；其余字段来自 Web 回合请求与主循环结果。
+    出参：无；作为内部参数对象传递。
+    异常：不抛异常；字段有效性由调用方和数据库约束共同保证。
+    """
+
+    connection: sqlite3.Connection
+    session_id: str
+    request_id: str
+    user_input: str
+    turn_result: dict[str, Any]
+    memory_summary: str
+    now_iso: str
 
 
 def build_session_runtime_character_id(session_id: str) -> str:
@@ -53,6 +89,84 @@ def _json_list_or_empty(raw: Any) -> list[Any]:
     异常：不抛异常；非法类型按空列表处理。
     """
     return raw if isinstance(raw, list) else []
+
+
+def _turn_history_json_fields(turn_result: dict[str, Any]) -> _TurnHistoryJsonFields:
+    """
+    功能：把主循环回合结果转换为 web_session_turns 的 JSON 列值。
+    入参：turn_result（dict[str, Any]）：主循环返回的标准回合结果。
+    出参：_TurnHistoryJsonFields，各字段已完成 JSON 序列化，可直接写入数据库。
+    异常：JSON 序列化失败时向上抛出 TypeError；调用方事务据此回滚。
+    """
+    action_intent_json = (
+        json.dumps(turn_result.get("action_intent"), ensure_ascii=False)
+        if turn_result.get("action_intent") is not None
+        else None
+    )
+    physics_diff_json = (
+        json.dumps(turn_result.get("physics_diff"), ensure_ascii=False)
+        if turn_result.get("physics_diff") is not None
+        else None
+    )
+    quest_states_source = (
+        turn_result.get("quest_states")
+        if "quest_states" in turn_result
+        else turn_result.get("quest_updates")
+    )
+    return _TurnHistoryJsonFields(
+        action_intent_json=action_intent_json,
+        physics_diff_json=physics_diff_json,
+        trigger_events_json=json.dumps(
+            _json_list_or_empty(turn_result.get("trigger_events")),
+            ensure_ascii=False,
+        ),
+        quest_updates_json=json.dumps(
+            _json_list_or_empty(turn_result.get("quest_updates")),
+            ensure_ascii=False,
+        ),
+        quest_states_json=json.dumps(
+            _json_list_or_empty(quest_states_source),
+            ensure_ascii=False,
+        ),
+        branch_consequences_json=json.dumps(
+            _json_list_or_empty(turn_result.get("branch_consequences")),
+            ensure_ascii=False,
+        ),
+    )
+
+
+def _json_load_or_default(raw: Any, default: Any) -> Any:
+    """
+    功能：解析可空 JSON 列，空值时返回调用方指定默认值。
+    入参：raw（Any）：数据库中的 JSON 字符串或空值；default（Any）：空值降级结果。
+    出参：Any，非空 JSON 的解析结果或 default。
+    异常：JSON 内容损坏时抛出 JSONDecodeError，保留读详情接口的显式失败语义。
+    """
+    return json.loads(str(raw)) if raw else default
+
+
+def _turn_detail_json_fields(row: sqlite3.Row) -> dict[str, Any]:
+    """
+    功能：解析回合详情中的 JSON 列并统一列表字段的降级边界。
+    入参：row（sqlite3.Row）：web_session_turns 查询返回的单行记录。
+    出参：dict[str, Any]，包含 action_intent、physics_diff、trigger_events、
+        quest_updates、quest_states、branch_consequences 六个响应字段。
+    异常：JSON 解析失败时向上抛出 JSONDecodeError；调用方据此暴露数据损坏问题。
+    """
+    trigger_events = _json_load_or_default(row["trigger_events_json"], [])
+    quest_updates = _json_load_or_default(row["quest_updates_json"], [])
+    quest_states = _json_load_or_default(row["quest_states_json"], [])
+    branch_consequences = _json_load_or_default(row["branch_consequences_json"], [])
+    return {
+        "action_intent": _json_load_or_default(row["action_intent_json"], None),
+        "physics_diff": _json_load_or_default(row["physics_diff_json"], None),
+        "trigger_events": trigger_events if isinstance(trigger_events, list) else [],
+        "quest_updates": quest_updates if isinstance(quest_updates, list) else [],
+        "quest_states": quest_states if isinstance(quest_states, list) else [],
+        "branch_consequences": (
+            branch_consequences if isinstance(branch_consequences, list) else []
+        ),
+    }
 
 
 def _unique_strings(raw: Any) -> list[str]:
@@ -601,49 +715,25 @@ class WebSessionStore:
 
     def _persist_turn_result_in_transaction(
         self,
-        connection: sqlite3.Connection,
-        session_id: str,
-        request_id: str,
-        user_input: str,
-        turn_result: dict[str, Any],
-        memory_summary: str,
-        now_iso: str,
+        persistence: _TurnPersistenceInput,
     ) -> int:
         """
         功能：在调用方事务中持久化回合结果并推进会话游标。
-        入参：connection（sqlite3.Connection）：已开启事务的连接；session_id（str）：会话标识；
-            request_id（str）：请求标识；user_input（str）：玩家输入；
-            turn_result（dict[str, Any]）：
-            主循环回合结果；memory_summary（str）：摘要；now_iso（str）：更新时间。
+        入参：persistence（_TurnPersistenceInput）：已开启事务连接与回合写入所需字段。
         出参：int，持久化后的会话内回合号。
         异常：session 不存在、唯一约束冲突或 SQL 执行失败时抛出 sqlite3.Error；
             不在本函数捕获，交由上层事务决定回滚策略。
         """
-        action_intent_json = (
-            json.dumps(turn_result.get("action_intent"), ensure_ascii=False)
-            if turn_result.get("action_intent") is not None
-            else None
-        )
-        physics_diff_json = (
-            json.dumps(turn_result.get("physics_diff"), ensure_ascii=False)
-            if turn_result.get("physics_diff") is not None
-            else None
-        )
-        trigger_events_json = json.dumps(
-            _json_list_or_empty(turn_result.get("trigger_events")),
-            ensure_ascii=False,
-        )
-        quest_updates_json = json.dumps(
-            _json_list_or_empty(turn_result.get("quest_updates")),
-            ensure_ascii=False,
-        )
+        connection = persistence.connection
+        turn_result = persistence.turn_result
+        history_json = _turn_history_json_fields(turn_result)
         session_row = connection.execute(
             """
             SELECT current_turn_id, session_metadata_json
             FROM web_sessions
             WHERE session_id = ?
             """,
-            (session_id,),
+            (persistence.session_id,),
         ).fetchone()
         if session_row is None:
             raise sqlite3.IntegrityError("session_id 不存在，无法写入回合")
@@ -661,24 +751,27 @@ class WebSessionStore:
             INSERT INTO web_session_turns(
                 session_id, turn_id, request_id, user_input, is_valid,
                 action_intent_json, physics_diff_json,
-                trigger_events_json, quest_updates_json,
+                trigger_events_json, quest_updates_json, quest_states_json,
+                branch_consequences_json,
                 final_response, memory_summary, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                session_id,
+                persistence.session_id,
                 persisted_turn_id,
-                request_id,
-                user_input,
+                persistence.request_id,
+                persistence.user_input,
                 int(bool(turn_result.get("is_valid", False))),
-                action_intent_json,
-                physics_diff_json,
-                trigger_events_json,
-                quest_updates_json,
+                history_json.action_intent_json,
+                history_json.physics_diff_json,
+                history_json.trigger_events_json,
+                history_json.quest_updates_json,
+                history_json.quest_states_json,
+                history_json.branch_consequences_json,
                 str(turn_result.get("final_response", "")),
-                memory_summary,
-                now_iso,
+                persistence.memory_summary,
+                persistence.now_iso,
             ),
         )
         connection.execute(
@@ -691,14 +784,41 @@ class WebSessionStore:
             (
                 persisted_turn_id,
                 int(bool(turn_result.get("is_sandbox_mode", False))),
-                memory_summary,
+                persistence.memory_summary,
                 session_metadata_json,
-                now_iso,
-                now_iso,
-                session_id,
+                persistence.now_iso,
+                persistence.now_iso,
+                persistence.session_id,
             ),
         )
         return persisted_turn_id
+
+    def _update_response_derived_turn_fields_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        persisted_turn_id: int,
+        response_payload: dict[str, Any],
+    ) -> None:
+        """
+        功能：把需要 session_turn_id 才能生成的响应派生字段回填到回合历史。
+        入参：connection（sqlite3.Connection）：当前事务连接；session_id（str）：会话 ID；
+            persisted_turn_id（int）：会话内回合号；response_payload（dict[str, Any]）：最终响应。
+        出参：None。
+        异常：JSON 序列化或 SQL 执行失败时向上抛出，由调用方事务回滚。
+        """
+        branch_consequences_json = json.dumps(
+            _json_list_or_empty(response_payload.get("branch_consequences")),
+            ensure_ascii=False,
+        )
+        connection.execute(
+            """
+            UPDATE web_session_turns
+            SET branch_consequences_json = ?
+            WHERE session_id = ? AND turn_id = ?
+            """,
+            (branch_consequences_json, session_id, persisted_turn_id),
+        )
 
     def _upsert_narrative_memory_items_in_transaction(
         self,
@@ -759,6 +879,35 @@ class WebSessionStore:
                 ),
             )
 
+    def _get_reusable_idempotent_response_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        scope: str,
+        session_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        """
+        功能：在当前事务中读取可直接复用的幂等响应。
+        入参：connection（sqlite3.Connection）：已开启事务连接；scope/session_id/request_id：
+            幂等键三元组。
+        出参：dict[str, Any] | None，成功响应缓存可复用时返回 payload，否则返回 None。
+        异常：SQL 查询失败时向上抛出；坏 JSON 在解析 helper 内降级为 None。
+        """
+        existing = connection.execute(
+            """
+            SELECT response_json
+            FROM web_idempotency_keys
+            WHERE scope = ? AND session_id = ? AND request_id = ?
+            """,
+            (scope, session_id, request_id),
+        ).fetchone()
+        if existing is None:
+            return None
+        loaded = _load_idempotency_payload(existing["response_json"])
+        if loaded is None or _is_pending_idempotency_payload(loaded):
+            return None
+        return None if _is_error_idempotency_payload(loaded) else loaded
+
     def persist_turn_result_with_idempotency(
         self,
         scope: str,
@@ -786,30 +935,26 @@ class WebSessionStore:
         """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                """
-                SELECT response_json
-                FROM web_idempotency_keys
-                WHERE scope = ? AND session_id = ? AND request_id = ?
-                """,
-                (scope, session_id, request_id),
-            ).fetchone()
-            if existing is not None:
-                loaded = _load_idempotency_payload(existing["response_json"])
-                if loaded is not None and not (
-                    _is_pending_idempotency_payload(loaded) or _is_error_idempotency_payload(loaded)
-                ):
-                    connection.commit()
-                    return loaded, False
+            loaded = self._get_reusable_idempotent_response_in_transaction(
+                connection,
+                scope,
+                session_id,
+                request_id,
+            )
+            if loaded is not None:
+                connection.commit()
+                return loaded, False
 
             persisted_turn_id = self._persist_turn_result_in_transaction(
-                connection=connection,
-                session_id=session_id,
-                request_id=request_id,
-                user_input=user_input,
-                turn_result=turn_result,
-                memory_summary=memory_summary,
-                now_iso=now_iso,
+                _TurnPersistenceInput(
+                    connection=connection,
+                    session_id=session_id,
+                    request_id=request_id,
+                    user_input=user_input,
+                    turn_result=turn_result,
+                    memory_summary=memory_summary,
+                    now_iso=now_iso,
+                )
             )
             if memory_items_builder is not None:
                 memory_items = memory_items_builder(persisted_turn_id)
@@ -820,6 +965,12 @@ class WebSessionStore:
                     now_iso=now_iso,
                 )
             response_payload = response_builder(persisted_turn_id)
+            self._update_response_derived_turn_fields_in_transaction(
+                connection=connection,
+                session_id=session_id,
+                persisted_turn_id=persisted_turn_id,
+                response_payload=response_payload,
+            )
             response_json = json.dumps(response_payload, ensure_ascii=False)
             connection.execute(
                 """
@@ -1198,7 +1349,8 @@ class WebSessionStore:
                 """
                 SELECT turn_id, created_at, user_input, is_valid,
                        action_intent_json, physics_diff_json,
-                       trigger_events_json, quest_updates_json,
+                       trigger_events_json, quest_updates_json, quest_states_json,
+                       branch_consequences_json,
                        final_response, memory_summary
                 FROM web_session_turns
                 WHERE session_id = ? AND turn_id = ?
@@ -1207,27 +1359,18 @@ class WebSessionStore:
             ).fetchone()
         if row is None:
             return None
-        action_intent = (
-            json.loads(str(row["action_intent_json"])) if row["action_intent_json"] else None
-        )
-        physics_diff = (
-            json.loads(str(row["physics_diff_json"])) if row["physics_diff_json"] else None
-        )
-        trigger_events = (
-            json.loads(str(row["trigger_events_json"])) if row["trigger_events_json"] else []
-        )
-        quest_updates = (
-            json.loads(str(row["quest_updates_json"])) if row["quest_updates_json"] else []
-        )
+        detail_json = _turn_detail_json_fields(row)
         return {
             "session_turn_id": int(row["turn_id"]),
             "created_at": str(row["created_at"]),
             "user_input": str(row["user_input"]),
             "is_valid": bool(int(row["is_valid"])),
-            "action_intent": action_intent,
-            "physics_diff": physics_diff,
-            "trigger_events": trigger_events if isinstance(trigger_events, list) else [],
-            "quest_updates": quest_updates if isinstance(quest_updates, list) else [],
+            "action_intent": detail_json["action_intent"],
+            "physics_diff": detail_json["physics_diff"],
+            "trigger_events": detail_json["trigger_events"],
+            "quest_updates": detail_json["quest_updates"],
+            "quest_states": detail_json["quest_states"],
+            "branch_consequences": detail_json["branch_consequences"],
             "final_response": str(row["final_response"]),
             "memory_summary": str(row["memory_summary"] or ""),
         }
@@ -1395,13 +1538,15 @@ class WebSessionStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             persisted_turn_id = self._persist_turn_result_in_transaction(
-                connection=connection,
-                session_id=session_id,
-                request_id=request_id,
-                user_input=user_input,
-                turn_result=turn_result,
-                memory_summary=memory_summary,
-                now_iso=now_iso,
+                _TurnPersistenceInput(
+                    connection=connection,
+                    session_id=session_id,
+                    request_id=request_id,
+                    user_input=user_input,
+                    turn_result=turn_result,
+                    memory_summary=memory_summary,
+                    now_iso=now_iso,
+                )
             )
             if memory_items_builder is not None:
                 memory_items = memory_items_builder(persisted_turn_id)

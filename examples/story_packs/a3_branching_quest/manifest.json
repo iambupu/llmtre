@@ -1,0 +1,17 @@
+{
+  "pack_id": "a3_branching_quest",
+  "version": "0.1.0",
+  "title": "盐契分岔",
+  "author": "TRE Team",
+  "scenario_id": "default",
+  "start_scene_id": "market_square",
+  "supported_actions": ["observe", "move", "talk", "inspect"],
+  "lore_files": ["setting.md"],
+  "rules_overlay": {
+    "narrative_style": "城镇调查、明确后果、分支选择可追踪",
+    "a3_acceptance": {
+      "meaningful_choice": true,
+      "branch_group": "salt_deal_approach"
+    }
+  }
+}

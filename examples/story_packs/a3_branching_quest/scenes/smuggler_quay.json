@@ -1,0 +1,62 @@
+{
+  "scene_id": "smuggler_quay",
+  "display_name": "旧码头雨棚",
+  "summary": "半截船桅横在雨棚外，私盐袋被旧渔网盖住，码头线人席舟正把一枚盐契扣在掌心。",
+  "exits": [
+    {
+      "target_scene_id": "market_square",
+      "label": "返回夜市",
+      "aliases": ["夜市", "返回", "北"]
+    },
+    {
+      "target_scene_id": "watch_house",
+      "label": "去守备所",
+      "aliases": ["守备所", "巡逻道", "找守备"]
+    },
+    {
+      "target_scene_id": "archive_hall",
+      "label": "绕去封契库后门",
+      "aliases": ["封契库", "后门", "档案"]
+    }
+  ],
+  "interactables": [
+    {
+      "interaction_id": "inspect_hidden_crate",
+      "label": "检查网下盐箱",
+      "kind": "inspect",
+      "target_ref": "hidden_salt_crate",
+      "aliases": ["盐箱", "渔网", "私盐"]
+    },
+    {
+      "interaction_id": "talk_runner_xi",
+      "label": "与线人席舟交易",
+      "kind": "talk",
+      "target_ref": "runner_xi",
+      "aliases": ["席舟", "线人", "交易"]
+    },
+    {
+      "interaction_id": "inspect_sealed_crate_after_bargain",
+      "label": "复查封好的盐箱",
+      "kind": "inspect",
+      "target_ref": "hidden_salt_crate",
+      "aliases": ["复查盐箱", "封好的盐箱"]
+    }
+  ],
+  "visible_npcs": [
+    {
+      "id": "runner_xi",
+      "label": "席舟",
+      "description": "旧码头线人，能交出私盐账口，但会要求你暂时不惊动守备。",
+      "aliases": ["席舟", "线人"]
+    }
+  ],
+  "visible_items": [
+    {
+      "id": "hidden_salt_crate",
+      "label": "网下盐箱",
+      "description": "盐箱角落有被刮掉的官封蜡印。",
+      "aliases": ["盐箱", "私盐"]
+    }
+  ],
+  "triggers": ["inspect_hidden_crate", "talk_runner_xi", "inspect_sealed_crate_after_bargain"]
+}

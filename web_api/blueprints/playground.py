@@ -12,6 +12,22 @@ from werkzeug.exceptions import NotFound
 playground_blueprint = Blueprint("playground", __name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="12" fill="#0f172a"/>
+<path d="M32 10l5.6 16.4L55 32l-17.4 5.6L32 54l-5.6-16.4L9 32l17.4-5.6z" fill="#f8fafc"/>
+<circle cx="32" cy="32" r="6" fill="#fbbf24"/>
+</svg>"""
+
+
+@playground_blueprint.get("/favicon.ico")
+def favicon() -> Response:
+    """
+    功能：提供浏览器自动请求的站点图标，避免 `/app` 冒烟检查出现无意义 404。
+    入参：无。
+    出参：Response，内联 SVG 图标响应。
+    异常：无主动抛出异常；Flask 响应构造失败时由框架抛出运行时异常。
+    """
+    return Response(FAVICON_SVG, mimetype="image/svg+xml")
 
 
 @playground_blueprint.get("/play")
